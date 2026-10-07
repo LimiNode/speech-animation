@@ -26,6 +26,10 @@ future pronunciation provider may add `PredictedPronunciation` spans, while a
 later aligner may refine only future spans to `AcousticAligned`; already played
 sample ranges remain immutable at the presentation layer.
 
-Backend bridges should convert their own progress markers to the neutral
-`SpeechGenerationProgress` type. The core must not include Qwen, PocketTTS,
-xVibe, Unity, Godot, VRM, or Live2D headers.
+The per-sample public representation is intentionally a v0 correctness model.
+Before the API is stabilized, it should be replaced or supplemented by fixed
+media-clock analysis hops whose boundaries are independent of input chunks.
+
+Progress evidence belongs to the predictive-viseme milestone, where its actual
+consumer and required fields can define the contract. The v0 core must not
+include Qwen, PocketTTS, xVibe, Unity, Godot, VRM, or Live2D headers.

@@ -24,7 +24,15 @@ float one_pole_coefficient(float milliseconds, std::uint32_t sample_rate) noexce
 
 SpeechAnimationAnalyzer::SpeechAnimationAnalyzer(AnalyzerConfig config)
     : config_(config) {
-    if (config_.energy_attack_ms < 0.0F || config_.energy_release_ms < 0.0F ||
+    const bool finite = std::isfinite(config_.energy_attack_ms) &&
+                        std::isfinite(config_.energy_release_ms) &&
+                        std::isfinite(config_.mouth_attack_ms) &&
+                        std::isfinite(config_.mouth_release_ms) &&
+                        std::isfinite(config_.normalizer_attack_ms) &&
+                        std::isfinite(config_.normalizer_release_ms) &&
+                        std::isfinite(config_.silence_threshold) &&
+                        std::isfinite(config_.silence_floor);
+    if (!finite || config_.energy_attack_ms < 0.0F || config_.energy_release_ms < 0.0F ||
         config_.mouth_attack_ms < 0.0F || config_.mouth_release_ms < 0.0F ||
         config_.normalizer_attack_ms < 0.0F || config_.normalizer_release_ms < 0.0F ||
         config_.silence_threshold < 0.0F || config_.silence_threshold > 1.0F ||
@@ -86,7 +94,6 @@ void SpeechAnimationAnalyzer::reset() {
     energy_state_ = 0.0F;
     normalizer_state_ = 0.0F;
     mouth_state_ = 0.0F;
-    previous_sample_ = 0.0F;
 }
 
 SpeechAnimationSpan SpeechAnimationAnalyzer::process_sample(std::uint64_t utterance_id,
@@ -120,12 +127,6 @@ SpeechAnimationSpan SpeechAnimationAnalyzer::process_sample(std::uint64_t uttera
     mouth_state_ += mouth_alpha * (target_mouth - mouth_state_);
 
     const bool active = normalized_energy > config_.silence_threshold;
-    // v0 deliberately does not claim phonetic identity. This flag is only a
-    // lightweight activity/periodicity hint and carries AudioReactive evidence.
-    const bool voiced = config_.enable_voiced_heuristic && active &&
-                        std::fabs(sample - previous_sample_) < 0.8F;
-    previous_sample_ = sample;
-
     SpeechAnimationSpan span;
     span.utterance_id = utterance_id;
     span.sample_begin = sample_position;
@@ -134,7 +135,6 @@ SpeechAnimationSpan SpeechAnimationAnalyzer::process_sample(std::uint64_t uttera
     span.energy = normalized_energy;
     span.mouth_open = clamp01(mouth_state_);
     span.activity = active ? SpeechActivity::Active : SpeechActivity::Silence;
-    span.voiced = voiced;
     span.viseme.reset();
     return span;
 }

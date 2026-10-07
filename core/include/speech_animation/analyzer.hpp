@@ -22,8 +22,6 @@ struct AnalyzerConfig {
     float silence_threshold = 0.08F;
     float silence_floor = 1.0e-4F;
 
-    // The simple v0 voiced flag is intentionally conservative and optional.
-    bool enable_voiced_heuristic = true;
 };
 
 class SpeechAnimationAnalyzer {
@@ -64,7 +62,6 @@ private:
     float energy_state_ = 0.0F;
     float normalizer_state_ = 0.0F;
     float mouth_state_ = 0.0F;
-    float previous_sample_ = 0.0F;
 };
 
 using Analyzer = SpeechAnimationAnalyzer;

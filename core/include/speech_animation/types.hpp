@@ -48,24 +48,16 @@ struct SpeechAnimationSpan {
 
     // Audio-reactive state exposed alongside the canonical fields above.
     SpeechActivity activity = SpeechActivity::Silence;
-    bool voiced = false;
 };
 
-// Generic PCM input. The buffer is borrowed for the duration of feed().
+// Generic normalized float PCM input. The buffer is borrowed for feed().
+// Non-finite samples are treated as silence; finite values are clipped to [-1, 1].
 struct PcmChunk {
     std::uint64_t utterance_id = 0;
     std::uint64_t sample_begin = 0;
     std::uint32_t sample_rate = 0;
     const float* samples = nullptr;
     std::uint32_t sample_count = 0;
-};
-
-// Optional neutral progress evidence for a future predictive/alignment path.
-// No backend-specific types belong in this header.
-struct SpeechGenerationProgress {
-    std::uint64_t sample_position = 0;
-    float normalized_text_progress = 0.0F;
-    float confidence = 0.0F;
 };
 
 } // namespace speech_animation
