@@ -51,6 +51,7 @@ public:
 
     const AnalyzerConfig& config() const noexcept { return config_; }
     bool initialized() const noexcept { return initialized_; }
+    std::uint32_t sample_rate() const noexcept { return sample_rate_; }
     std::uint64_t next_sample_position() const noexcept { return next_sample_position_; }
 
 private:

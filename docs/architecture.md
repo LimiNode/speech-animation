@@ -37,3 +37,11 @@ boundary, then becomes idempotent.
 Progress evidence belongs to the predictive-viseme milestone, where its actual
 consumer and required fields can define the contract. The v0 core must not
 include Qwen, PocketTTS, xVibe, Unity, Godot, VRM, or Live2D headers.
+
+The optional application integration layer in `integration/` maps neutral
+`SpeechTimingChunk` values into `PcmChunk`, drains them through a bounded
+non-blocking queue, and emits JSON-serializable receipts. It is deliberately
+outside the core target so a TTS bridge can depend on it without making the
+analyzer depend on that bridge. Completion and cancellation append a synthetic
+zero-PCM tail at the next sample position and mark exactly one terminal
+receipt.

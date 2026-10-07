@@ -46,3 +46,10 @@ cmake -S . -B build -DSPEECH_ANIMATION_BUILD_BENCHMARKS=ON
 cmake --build build --config Release --target speech_animation_benchmark
 build\speech_animation_benchmark.exe
 ```
+
+The optional `speech_animation::integration` target provides a bridge-neutral
+vertical slice. Push owned `SpeechTimingChunk` values into its preallocated
+bounded queue, call `process_available()` from a consumer thread, and serialize
+the returned `SpeechAnimationReceipt` values with `to_json()`. `complete()` and
+`cancel()` drain accepted PCM, append a sample-addressed zero tail, and mark one
+terminal receipt; late chunks are rejected.
