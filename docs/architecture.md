@@ -15,10 +15,11 @@ PCM sample → one-pole energy envelope → adaptive normalization
 
 There is no look-ahead buffer and no background thread. State is owned by one
 `SpeechAnimationAnalyzer` instance, and `reset()` is the explicit
-cross-utterance boundary. Per-sample spans make a complete run invariant under
-one large chunk, fixed-size chunks, irregular chunks, and one-sample chunks;
-the only accepted difference between runs is normal floating-point arithmetic
-on the same ordered samples (which is identical for this implementation).
+cross-utterance boundary. DSP state evolves per sample, then public spans are
+summarized on a fixed hop anchored to the first accepted sample position. A
+complete run is therefore invariant under one large chunk, fixed-size chunks,
+irregular chunks, and one-sample chunks; hop boundaries never move with input
+chunk boundaries.
 
 `SpeechAnimationSpan::viseme` is empty in v0. Energy and mouth opening carry
 `AudioReactive` semantics and must not be presented as a known phoneme. A
@@ -26,9 +27,12 @@ future pronunciation provider may add `PredictedPronunciation` spans, while a
 later aligner may refine only future spans to `AcousticAligned`; already played
 sample ranges remain immutable at the presentation layer.
 
-The per-sample public representation is intentionally a v0 correctness model.
-Before the API is stabilized, it should be replaced or supplemented by fixed
-media-clock analysis hops whose boundaries are independent of input chunks.
+The fixed-hop public representation is the production-facing v0 shape. The
+benchmark compares 1-sample, 80-sample, 10 ms, 40 ms, and 80 ms input chunks;
+all produce the same sample-addressed hop timeline. A future adapter may choose
+a different hop, but it must remain anchored to the canonical sample clock.
+`flush()` emits one final partial hop when the utterance does not end on a hop
+boundary, then becomes idempotent.
 
 Progress evidence belongs to the predictive-viseme milestone, where its actual
 consumer and required fields can define the contract. The v0 core must not

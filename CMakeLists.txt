@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(speech_animation VERSION 0.1.0 LANGUAGES CXX)
 
 option(SPEECH_ANIMATION_BUILD_TESTS "Build speech-animation tests" ON)
+option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF)
 
 add_library(speech_animation
     core/src/analyzer.cpp
@@ -26,6 +27,11 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
     add_executable(speech_animation_tests tests/analyzer_tests.cpp)
     target_link_libraries(speech_animation_tests PRIVATE speech_animation::speech_animation)
     add_test(NAME speech_animation_tests COMMAND speech_animation_tests)
+endif()
+
+if(SPEECH_ANIMATION_BUILD_BENCHMARKS)
+    add_executable(speech_animation_benchmark benchmarks/analyzer_benchmark.cpp)
+    target_link_libraries(speech_animation_benchmark PRIVATE speech_animation::speech_animation)
 endif()
 
 include(GNUInstallDirs)
