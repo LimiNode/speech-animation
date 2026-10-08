@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(speech_animation VERSION 0.1.0 LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 option(SPEECH_ANIMATION_BUILD_TESTS "Build speech-animation tests" ON)
 option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF)
 
@@ -22,7 +24,8 @@ target_include_directories(speech_animation
 )
 
 target_compile_features(speech_animation_integration PUBLIC cxx_std_17)
-target_link_libraries(speech_animation_integration PUBLIC speech_animation::speech_animation)
+target_link_libraries(speech_animation_integration PUBLIC
+    speech_animation::speech_animation Threads::Threads)
 target_include_directories(speech_animation_integration
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/integration/include>
@@ -44,7 +47,8 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
     add_test(NAME speech_animation_tests COMMAND speech_animation_tests)
 
     add_executable(speech_animation_integration_tests tests/integration_tests.cpp)
-    target_link_libraries(speech_animation_integration_tests PRIVATE speech_animation::integration)
+    target_link_libraries(speech_animation_integration_tests PRIVATE
+        speech_animation::integration Threads::Threads)
     add_test(NAME speech_animation_integration_tests COMMAND speech_animation_integration_tests)
 endif()
 

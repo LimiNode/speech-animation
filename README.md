@@ -53,5 +53,7 @@ The optional `speech_animation::integration` target provides a bridge-neutral
 vertical slice. Push owned `SpeechTimingChunk` values into its preallocated
 bounded queue, call `process_available()` from a consumer thread, and serialize
 the returned `SpeechAnimationReceipt` values with `to_json()`. `complete()` and
-`cancel()` drain accepted PCM, append a sample-addressed zero tail, and mark one
-terminal receipt; late chunks are rejected.
+`cancel()` drain accepted PCM, then emit one explicit terminal-fade receipt
+anchored at the next sample position; no synthetic PCM is inserted into the
+playback timeline. Call `begin()` when a request may terminate before its first
+PCM chunk; late chunks are rejected.

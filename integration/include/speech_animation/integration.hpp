@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,8 +34,14 @@ enum class PipelineState {
     Cancelled,
 };
 
-// One JSON-serializable record for an emitted analyzer span.
+enum class SpeechAnimationReceiptKind {
+    AudioSpan,
+    TerminalFade,
+};
+
+// One JSON-serializable record for an audio span or terminal fade cue.
 struct SpeechAnimationReceipt {
+    SpeechAnimationReceiptKind kind = SpeechAnimationReceiptKind::AudioSpan;
     std::uint64_t request_id = 0;
     std::uint64_t input_first_sample = 0;
     std::uint32_t input_sample_count = 0;
@@ -46,6 +53,7 @@ struct SpeechAnimationReceipt {
     bool terminal = false;
     PipelineState terminal_state = PipelineState::Active;
     bool synthetic_terminal_tail = false;
+    std::uint32_t terminal_fade_sample_count = 0;
 
     std::string to_json() const;
 };
@@ -58,8 +66,8 @@ struct PipelineConfig {
     // or apply its own upstream backpressure; no audio is silently dropped.
     std::size_t queue_capacity = 8;
 
-    // A terminal zero PCM tail is part of the same sample timeline. Zero means
-    // derive 160 ms from the input sample rate; a non-zero value is exact.
+    // Terminal fade duration anchored after the last actual PCM sample. Zero
+    // means derive 160 ms from the input sample rate; a non-zero value is exact.
     float terminal_tail_ms = 160.0F;
     std::uint32_t terminal_tail_samples = 0;
 };
@@ -71,6 +79,12 @@ public:
     SpeechAnimationPipeline(const SpeechAnimationPipeline&) = delete;
     SpeechAnimationPipeline& operator=(const SpeechAnimationPipeline&) = delete;
 
+    // Establishes request metadata before any PCM arrives. Call this before
+    // starting the producer when a request may complete/cancel before audio.
+    QueuePushResult begin(std::uint64_t request_id,
+                          std::uint64_t first_sample,
+                          std::uint32_t sample_rate);
+
     // Non-blocking bounded producer operation. The vector is moved into the
     // queue, so callers should provide an owned PCM buffer.
     QueuePushResult push(SpeechTimingChunk chunk);
@@ -80,38 +94,43 @@ public:
     std::vector<SpeechAnimationReceipt> process_available();
 
     // Preserve bridge lifecycle semantics. Already queued audio is processed
-    // before the terminal tail and exactly one terminal receipt is emitted.
+    // before the terminal fade and exactly one terminal receipt is emitted.
     bool complete();
     bool cancel();
 
-    bool terminal() const noexcept { return state_ != PipelineState::Active; }
-    PipelineState state() const noexcept { return state_; }
-    std::size_t queued_chunks() const noexcept { return queue_size_; }
+    bool terminal() const noexcept { return terminal_requested_.load(std::memory_order_acquire); }
+    PipelineState state() const noexcept { return state_.load(std::memory_order_acquire); }
+    std::size_t queued_chunks() const noexcept;
     const PipelineConfig& config() const noexcept { return config_; }
 
 private:
-    std::vector<SpeechAnimationReceipt> process_chunk(const SpeechTimingChunk& chunk,
-                                                      bool synthetic_tail);
-    std::vector<SpeechAnimationReceipt> emit_terminal_tail();
-    std::uint32_t terminal_tail_count(std::uint32_t sample_rate) const;
+    std::vector<SpeechAnimationReceipt> process_chunk(const SpeechTimingChunk& chunk);
+    std::vector<SpeechAnimationReceipt> emit_terminal_fade();
+    std::uint32_t terminal_fade_sample_count(std::uint32_t sample_rate) const;
     std::vector<SpeechAnimationReceipt> receipts_for_spans(
-        const SpeechTimingChunk& input,
-        const std::vector<SpeechAnimationSpan>& spans,
-        bool synthetic_tail) const;
+        std::uint64_t request_id,
+        std::uint32_t sample_rate,
+        const std::vector<SpeechAnimationSpan>& spans) const;
 
     PipelineConfig config_;
     SpeechAnimationAnalyzer analyzer_;
     std::vector<std::optional<SpeechTimingChunk>> queue_;
-    std::size_t queue_head_ = 0;
-    std::size_t queue_size_ = 0;
+    std::atomic<std::uint64_t> write_index_{0};
+    std::atomic<std::uint64_t> read_index_{0};
+    std::atomic<std::uint32_t> producers_in_flight_{0};
     std::uint64_t request_id_ = 0;
     bool request_initialized_ = false;
-    bool terminal_requested_ = false;
+    std::atomic<bool> terminal_requested_{false};
     bool terminal_emitted_ = false;
-    PipelineState state_ = PipelineState::Active;
+    std::atomic<PipelineState> state_{PipelineState::Active};
     std::uint32_t sample_rate_ = 0;
     bool input_position_initialized_ = false;
     std::uint64_t next_input_sample_ = 0;
+    std::atomic<std::uint64_t> published_request_id_{0};
+    std::atomic<std::uint32_t> published_sample_rate_{0};
+    std::atomic<std::uint64_t> published_next_sample_{0};
+    std::uint64_t consumer_request_id_ = 0;
+    std::uint32_t consumer_sample_rate_ = 0;
 };
 
 } // namespace speech_animation::integration

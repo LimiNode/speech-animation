@@ -45,5 +45,5 @@ The optional application integration layer in `integration/` maps neutral
 non-blocking queue, and emits JSON-serializable receipts. It is deliberately
 outside the core target so a TTS bridge can depend on it without making the
 analyzer depend on that bridge. Completion and cancellation append a synthetic
-zero-PCM tail at the next sample position and mark exactly one terminal
-receipt.
+fade receipt at the next sample position and mark exactly one terminal receipt;
+no synthetic PCM is inserted into the playback timeline.

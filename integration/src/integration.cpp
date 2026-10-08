@@ -6,6 +6,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace speech_animation::integration {
@@ -24,23 +25,42 @@ const char* state_name(PipelineState state) noexcept {
     return "active";
 }
 
+const char* kind_name(SpeechAnimationReceiptKind kind) noexcept {
+    return kind == SpeechAnimationReceiptKind::AudioSpan ? "audio_span" : "terminal_fade";
+}
+
+class ProducerGuard {
+public:
+    explicit ProducerGuard(std::atomic<std::uint32_t>& count) : count_(count) {
+        count_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    ~ProducerGuard() {
+        count_.fetch_sub(1, std::memory_order_release);
+    }
+
+private:
+    std::atomic<std::uint32_t>& count_;
+};
+
 } // namespace
 
 std::string SpeechAnimationReceipt::to_json() const {
     std::ostringstream json;
     json << std::setprecision(9)
-         << "{\"request_id\":" << request_id
+         << "{\"kind\":\"" << kind_name(kind) << '\"'
+         << ",\"request_id\":" << request_id
          << ",\"input_first_sample\":" << input_first_sample
          << ",\"input_sample_count\":" << input_sample_count
          << ",\"output_first_sample\":" << output_first_sample
          << ",\"output_sample_count\":" << output_sample_count
          << ",\"sample_rate\":" << sample_rate
-         << ",\"activity\":\"" << activity_name(activity) << '\"'
+         << ",\"activity\":\"" << activity_name(activity) << '"'
          << ",\"mouth_open\":" << mouth_open
          << ",\"terminal\":" << (terminal ? "true" : "false")
-         << ",\"terminal_state\":\"" << state_name(terminal_state) << '\"'
+         << ",\"terminal_state\":\"" << state_name(terminal_state) << '"'
          << ",\"synthetic_terminal_tail\":"
-         << (synthetic_terminal_tail ? "true" : "false") << '}';
+         << (synthetic_terminal_tail ? "true" : "false")
+         << ",\"terminal_fade_sample_count\":" << terminal_fade_sample_count << '}';
     return json.str();
 }
 
@@ -50,11 +70,39 @@ SpeechAnimationPipeline::SpeechAnimationPipeline(PipelineConfig config)
         config_.terminal_tail_ms <= 0.0F) {
         throw std::invalid_argument("invalid speech animation pipeline configuration");
     }
+    // Slots are allocated before the producer can call push().
     queue_.resize(config_.queue_capacity);
 }
 
+std::size_t SpeechAnimationPipeline::queued_chunks() const noexcept {
+    const auto write = write_index_.load(std::memory_order_acquire);
+    const auto read = read_index_.load(std::memory_order_acquire);
+    return static_cast<std::size_t>(write - read);
+}
+
+QueuePushResult SpeechAnimationPipeline::begin(std::uint64_t request_id,
+                                               std::uint64_t first_sample,
+                                               std::uint32_t sample_rate) {
+    if (terminal()) {
+        return QueuePushResult::RejectedTerminal;
+    }
+    if (request_id == 0 || sample_rate == 0 || request_initialized_) {
+        return QueuePushResult::Invalid;
+    }
+    request_initialized_ = true;
+    request_id_ = request_id;
+    sample_rate_ = sample_rate;
+    input_position_initialized_ = true;
+    next_input_sample_ = first_sample;
+    published_request_id_.store(request_id, std::memory_order_release);
+    published_sample_rate_.store(sample_rate, std::memory_order_release);
+    published_next_sample_.store(first_sample, std::memory_order_release);
+    return QueuePushResult::Accepted;
+}
+
 QueuePushResult SpeechAnimationPipeline::push(SpeechTimingChunk chunk) {
-    if (terminal_requested_ || terminal()) {
+    ProducerGuard producer_guard(producers_in_flight_);
+    if (terminal()) {
         return QueuePushResult::RejectedTerminal;
     }
     if (chunk.request_id == 0 || chunk.sample_rate == 0 || chunk.pcm.empty() ||
@@ -64,10 +112,8 @@ QueuePushResult SpeechAnimationPipeline::push(SpeechTimingChunk chunk) {
     if (chunk.sample_count == 0) {
         chunk.sample_count = static_cast<std::uint32_t>(chunk.pcm.size());
     }
-    if (chunk.sample_count != chunk.pcm.size()) {
-        return QueuePushResult::Invalid;
-    }
-    if (chunk.first_sample > std::numeric_limits<std::uint64_t>::max() - chunk.sample_count) {
+    if (chunk.sample_count != chunk.pcm.size() ||
+        chunk.first_sample > std::numeric_limits<std::uint64_t>::max() - chunk.sample_count) {
         return QueuePushResult::Invalid;
     }
     if (request_initialized_ && chunk.request_id != request_id_) {
@@ -76,63 +122,107 @@ QueuePushResult SpeechAnimationPipeline::push(SpeechTimingChunk chunk) {
     if (input_position_initialized_ && chunk.first_sample != next_input_sample_) {
         return QueuePushResult::Invalid;
     }
-    if (queue_size_ >= config_.queue_capacity) {
+
+    const auto write = write_index_.load(std::memory_order_relaxed);
+    const auto read = read_index_.load(std::memory_order_acquire);
+    if (write - read >= config_.queue_capacity) {
         return QueuePushResult::Full;
     }
     if (!request_initialized_) {
-        request_initialized_ = true;
-        request_id_ = chunk.request_id;
-        sample_rate_ = chunk.sample_rate;
+        const auto result = begin(chunk.request_id, chunk.first_sample, chunk.sample_rate);
+        if (result != QueuePushResult::Accepted) {
+            return result;
+        }
     } else if (chunk.sample_rate != sample_rate_) {
         return QueuePushResult::Invalid;
     }
-    if (!input_position_initialized_) {
-        input_position_initialized_ = true;
-    }
-    next_input_sample_ = chunk.first_sample + chunk.sample_count;
-    const auto slot = (queue_head_ + queue_size_) % config_.queue_capacity;
+
+    const auto slot = write % config_.queue_capacity;
     queue_[slot].emplace(std::move(chunk));
-    ++queue_size_;
+    // A cancellation racing this commit may linearize before the chunk. Do not
+    // publish the slot in that case; the consumer can never observe it.
+    if (terminal()) {
+        queue_[slot].reset();
+        return QueuePushResult::RejectedTerminal;
+    }
+    // The moved-from local is no longer usable, so read metadata from the slot.
+    const auto& accepted = *queue_[slot];
+    next_input_sample_ = accepted.first_sample + accepted.sample_count;
+    input_position_initialized_ = true;
+    published_next_sample_.store(next_input_sample_, std::memory_order_release);
+    write_index_.store(write + 1, std::memory_order_release);
     return QueuePushResult::Accepted;
 }
 
 std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::process_available() {
     std::vector<SpeechAnimationReceipt> receipts;
-    while (queue_size_ != 0) {
-        SpeechTimingChunk chunk = std::move(*queue_[queue_head_]);
-        queue_[queue_head_].reset();
-        queue_head_ = (queue_head_ + 1) % config_.queue_capacity;
-        --queue_size_;
-        auto chunk_receipts = process_chunk(chunk, false);
+    while (true) {
+        auto read = read_index_.load(std::memory_order_relaxed);
+        const auto write = write_index_.load(std::memory_order_acquire);
+        if (read == write) {
+            if (!terminal()) {
+                break;
+            }
+            // Observe a producer commit that raced the first empty check.
+            if (read == write_index_.load(std::memory_order_acquire)) {
+                break;
+            }
+            continue;
+        }
+        SpeechTimingChunk chunk = std::move(*queue_[read % config_.queue_capacity]);
+        queue_[read % config_.queue_capacity].reset();
+        read_index_.store(read + 1, std::memory_order_release);
+        auto chunk_receipts = process_chunk(chunk);
         receipts.insert(receipts.end(), chunk_receipts.begin(), chunk_receipts.end());
     }
-    if (terminal_requested_ && !terminal_emitted_) {
-        auto tail_receipts = emit_terminal_tail();
-        receipts.insert(receipts.end(), tail_receipts.begin(), tail_receipts.end());
+    if (terminal() && !terminal_emitted_) {
+        // A push that started before cancellation either publishes a slot or
+        // observes the terminal state before this point. Waiting is confined
+        // to the consumer thread; the audio producer never waits.
+        while (producers_in_flight_.load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
+        // Drain a final producer commit that completed during the first pass.
+        while (true) {
+            auto read = read_index_.load(std::memory_order_relaxed);
+            const auto write = write_index_.load(std::memory_order_acquire);
+            if (read == write) {
+                break;
+            }
+            SpeechTimingChunk chunk = std::move(*queue_[read % config_.queue_capacity]);
+            queue_[read % config_.queue_capacity].reset();
+            read_index_.store(read + 1, std::memory_order_release);
+            auto chunk_receipts = process_chunk(chunk);
+            receipts.insert(receipts.end(), chunk_receipts.begin(), chunk_receipts.end());
+        }
+        auto terminal_receipts = emit_terminal_fade();
+        receipts.insert(receipts.end(), terminal_receipts.begin(), terminal_receipts.end());
     }
     return receipts;
 }
 
 bool SpeechAnimationPipeline::complete() {
-    if (terminal_requested_ || terminal()) {
+    bool expected = false;
+    if (!terminal_requested_.compare_exchange_strong(expected, true,
+                                                     std::memory_order_acq_rel)) {
         return false;
     }
-    terminal_requested_ = true;
-    state_ = PipelineState::Completed;
+    state_.store(PipelineState::Completed, std::memory_order_release);
     return true;
 }
 
 bool SpeechAnimationPipeline::cancel() {
-    if (terminal_requested_ || terminal()) {
+    bool expected = false;
+    if (!terminal_requested_.compare_exchange_strong(expected, true,
+                                                     std::memory_order_acq_rel)) {
         return false;
     }
-    terminal_requested_ = true;
-    state_ = PipelineState::Cancelled;
+    state_.store(PipelineState::Cancelled, std::memory_order_release);
     return true;
 }
 
 std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::process_chunk(
-    const SpeechTimingChunk& chunk, bool synthetic_tail) {
+    const SpeechTimingChunk& chunk) {
     const PcmChunk pcm{
         chunk.request_id,
         chunk.first_sample,
@@ -141,41 +231,58 @@ std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::process_chunk(
         chunk.sample_count,
     };
     const auto spans = analyzer_.feed(pcm);
-    return receipts_for_spans(chunk, spans, synthetic_tail);
+    if (consumer_request_id_ == 0) {
+        consumer_request_id_ = chunk.request_id;
+        consumer_sample_rate_ = chunk.sample_rate;
+    }
+    return receipts_for_spans(chunk.request_id, chunk.sample_rate, spans);
 }
 
-std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::emit_terminal_tail() {
-    if (!request_initialized_ || !analyzer_.initialized()) {
+std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::emit_terminal_fade() {
+    const auto request_id = consumer_request_id_ != 0
+        ? consumer_request_id_
+        : published_request_id_.load(std::memory_order_acquire);
+    const auto sample_rate = consumer_sample_rate_ != 0
+        ? consumer_sample_rate_
+        : published_sample_rate_.load(std::memory_order_acquire);
+    const auto anchor = analyzer_.initialized()
+        ? analyzer_.next_sample_position()
+        : published_next_sample_.load(std::memory_order_acquire);
+
+    std::vector<SpeechAnimationReceipt> receipts;
+    if (request_id == 0 || sample_rate == 0) {
         terminal_emitted_ = true;
-        return {};
+        return receipts;
+    }
+    if (analyzer_.initialized()) {
+        const auto final_spans = analyzer_.flush();
+        auto audio_receipts = receipts_for_spans(request_id, sample_rate, final_spans);
+        receipts.insert(receipts.end(), audio_receipts.begin(), audio_receipts.end());
     }
 
-    const auto tail_count = terminal_tail_count(sample_rate_);
-    SpeechTimingChunk tail;
-    tail.request_id = request_id_;
-    tail.first_sample = analyzer_.next_sample_position();
-    tail.sample_rate = sample_rate_;
-    tail.sample_count = tail_count;
-    tail.pcm.assign(tail_count, 0.0F);
-    auto receipts = process_chunk(tail, true);
-    auto final_span = analyzer_.flush();
-    auto flushed = receipts_for_spans(tail, final_span, true);
-    receipts.insert(receipts.end(), flushed.begin(), flushed.end());
-    if (!receipts.empty()) {
-        receipts.back().terminal = true;
-        receipts.back().terminal_state = state_;
-    }
+    SpeechAnimationReceipt fade;
+    fade.kind = SpeechAnimationReceiptKind::TerminalFade;
+    fade.request_id = request_id;
+    fade.input_first_sample = anchor;
+    fade.input_sample_count = 0;
+    fade.output_first_sample = anchor;
+    fade.output_sample_count = 0;
+    fade.sample_rate = sample_rate;
+    fade.activity = SpeechActivity::Silence;
+    fade.mouth_open = 0.0F;
+    fade.terminal = true;
+    fade.terminal_state = state();
+    fade.synthetic_terminal_tail = true;
+    fade.terminal_fade_sample_count = terminal_fade_sample_count(sample_rate);
+    receipts.push_back(fade);
     terminal_emitted_ = true;
     return receipts;
 }
 
-std::uint32_t SpeechAnimationPipeline::terminal_tail_count(std::uint32_t sample_rate) const {
+std::uint32_t SpeechAnimationPipeline::terminal_fade_sample_count(std::uint32_t sample_rate) const {
     if (config_.terminal_tail_samples != 0) {
         return config_.terminal_tail_samples;
     }
-    // The caller normally passes zero because analyzer keeps the authoritative
-    // sample rate internally; the common bridge sample rate is supplied by the
-    // first chunk in process_available().
     const auto rate = sample_rate == 0 ? 48000U : sample_rate;
     const auto requested = static_cast<double>(config_.terminal_tail_ms) * 0.001 * rate;
     if (requested > static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
@@ -185,22 +292,24 @@ std::uint32_t SpeechAnimationPipeline::terminal_tail_count(std::uint32_t sample_
 }
 
 std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::receipts_for_spans(
-    const SpeechTimingChunk& input,
-    const std::vector<SpeechAnimationSpan>& spans,
-    bool synthetic_tail) const {
+    std::uint64_t request_id,
+    std::uint32_t sample_rate,
+    const std::vector<SpeechAnimationSpan>& spans) const {
     std::vector<SpeechAnimationReceipt> receipts;
     receipts.reserve(spans.size());
     for (const auto& span : spans) {
         SpeechAnimationReceipt receipt;
-        receipt.request_id = input.request_id;
-        receipt.input_first_sample = input.first_sample;
-        receipt.input_sample_count = input.sample_count;
+        receipt.kind = SpeechAnimationReceiptKind::AudioSpan;
+        receipt.request_id = request_id;
+        // Provenance is the contributing canonical PCM range, not the callback
+        // chunk that happened to make the hop complete.
+        receipt.input_first_sample = span.sample_begin;
+        receipt.input_sample_count = span.sample_count;
         receipt.output_first_sample = span.sample_begin;
         receipt.output_sample_count = span.sample_count;
-        receipt.sample_rate = span.sample_rate;
+        receipt.sample_rate = sample_rate;
         receipt.activity = span.activity;
         receipt.mouth_open = span.mouth_open;
-        receipt.synthetic_terminal_tail = synthetic_tail;
         receipts.push_back(receipt);
     }
     return receipts;

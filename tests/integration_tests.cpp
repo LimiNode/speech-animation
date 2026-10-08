@@ -1,10 +1,12 @@
 #include <speech_animation/integration.hpp>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace speech_animation;
@@ -69,6 +71,9 @@ int main() {
         CHECK(terminal.back().synthetic_terminal_tail);
         CHECK(terminal.back().activity == SpeechActivity::Silence);
         CHECK(terminal.back().mouth_open == 0.0F);
+        CHECK(terminal.back().kind == SpeechAnimationReceiptKind::TerminalFade);
+        CHECK(terminal.back().to_json().find("\"kind\":\"terminal_fade\"") !=
+              std::string::npos);
 
         SpeechAnimationPipeline completed(config);
         CHECK(completed.push(chunk(8, 0, 48000, 16, 0.5F)) == QueuePushResult::Accepted);
@@ -93,8 +98,10 @@ int main() {
         };
         for (const auto& receipt : first) verify_range(receipt);
         for (const auto& receipt : terminal) verify_range(receipt);
-        CHECK(previous_end == 64);
-        CHECK(terminal.back().output_first_sample + terminal.back().output_sample_count == 64);
+        CHECK(previous_end == 32);
+        CHECK(terminal.back().output_sample_count == 0);
+        CHECK(terminal.back().terminal_fade_sample_count == config.terminal_tail_samples);
+        CHECK(terminal.back().output_first_sample == 32);
 
         // Artificial processing delays do not enter the sample-addressed result.
         PipelineConfig invariant_config = config;
@@ -120,7 +127,53 @@ int main() {
             CHECK(immediate_receipts[i].output_sample_count == delayed_receipts[i].output_sample_count);
             CHECK(immediate_receipts[i].activity == delayed_receipts[i].activity);
             CHECK(immediate_receipts[i].mouth_open == delayed_receipts[i].mouth_open);
+            CHECK(immediate_receipts[i].terminal_fade_sample_count ==
+                  delayed_receipts[i].terminal_fade_sample_count);
         }
+
+        SpeechAnimationPipeline no_pcm(config);
+        CHECK(no_pcm.begin(99, 100, 48000) == QueuePushResult::Accepted);
+        CHECK(no_pcm.cancel());
+        const auto no_pcm_receipts = no_pcm.process_available();
+        CHECK(no_pcm_receipts.size() == 1);
+        CHECK(no_pcm_receipts.front().terminal);
+        CHECK(no_pcm_receipts.front().output_first_sample == 100);
+        CHECK(no_pcm_receipts.front().output_sample_count == 0);
+
+        // Exercise the actual one-producer/one-consumer queue contract.
+        PipelineConfig threaded_config = config;
+        threaded_config.queue_capacity = 8;
+        SpeechAnimationPipeline threaded(threaded_config);
+        std::vector<SpeechAnimationReceipt> threaded_receipts;
+        std::atomic<bool> producer_done{false};
+        std::atomic<bool> producer_failed{false};
+        std::thread producer([&]() {
+            for (std::uint64_t index = 0; index < 200; ++index) {
+                const auto first_sample = index * 16;
+                while (threaded.push(chunk(123, first_sample, 48000, 16, 0.4F)) ==
+                       QueuePushResult::Full) {
+                    std::this_thread::yield();
+                }
+            }
+            if (!threaded.complete()) {
+                producer_failed.store(true, std::memory_order_release);
+            }
+            producer_done.store(true, std::memory_order_release);
+        });
+        while (!producer_done.load(std::memory_order_acquire) ||
+               threaded.queued_chunks() != 0 || !threaded.terminal()) {
+            auto batch = threaded.process_available();
+            threaded_receipts.insert(threaded_receipts.end(), batch.begin(), batch.end());
+            std::this_thread::yield();
+        }
+        auto final_batch = threaded.process_available();
+        threaded_receipts.insert(threaded_receipts.end(), final_batch.begin(), final_batch.end());
+        producer.join();
+        CHECK(!producer_failed.load(std::memory_order_acquire));
+        CHECK(!threaded_receipts.empty());
+        CHECK(threaded_receipts.back().terminal);
+        CHECK(threaded_receipts.back().output_first_sample == 3200);
+        CHECK(threaded_receipts.back().output_sample_count == 0);
 
         // Core and integration have no bridge dependency; this executable only
         // includes the neutral integration header.
