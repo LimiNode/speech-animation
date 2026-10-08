@@ -32,13 +32,15 @@ SpeechAnimationAnalyzer::SpeechAnimationAnalyzer(AnalyzerConfig config)
                         std::isfinite(config_.normalizer_attack_ms) &&
                         std::isfinite(config_.normalizer_release_ms) &&
                         std::isfinite(config_.silence_threshold) &&
-                        std::isfinite(config_.silence_floor) &&
-                        std::isfinite(config_.output_hop_ms);
+                        std::isfinite(config_.silence_floor);
+    const bool hop_duration_valid = config_.output_hop_samples != 0 ||
+                                    (std::isfinite(config_.output_hop_ms) &&
+                                     config_.output_hop_ms > 0.0F);
     if (!finite || config_.energy_attack_ms < 0.0F || config_.energy_release_ms < 0.0F ||
         config_.mouth_attack_ms < 0.0F || config_.mouth_release_ms < 0.0F ||
         config_.normalizer_attack_ms < 0.0F || config_.normalizer_release_ms < 0.0F ||
         config_.silence_threshold < 0.0F || config_.silence_threshold > 1.0F ||
-        config_.silence_floor < 0.0F || config_.output_hop_ms <= 0.0F) {
+        config_.silence_floor < 0.0F || !hop_duration_valid) {
         throw std::invalid_argument("invalid speech animation analyzer configuration");
     }
 }
@@ -48,6 +50,9 @@ float SpeechAnimationAnalyzer::coefficient(float milliseconds) const noexcept {
 }
 
 std::vector<SpeechAnimationSpan> SpeechAnimationAnalyzer::feed(const PcmChunk& chunk) {
+    if (flushed_) {
+        throw std::logic_error("feed after flush requires reset()");
+    }
     if (chunk.sample_count != 0 && chunk.samples == nullptr) {
         throw std::invalid_argument("PcmChunk has a non-zero count and a null buffer");
     }
@@ -93,6 +98,7 @@ std::vector<SpeechAnimationSpan> SpeechAnimationAnalyzer::feed(const PcmChunk& c
 }
 
 std::vector<SpeechAnimationSpan> SpeechAnimationAnalyzer::flush() {
+    flushed_ = true;
     if (!initialized_ || current_hop_count_ == 0) {
         return {};
     }
@@ -101,6 +107,7 @@ std::vector<SpeechAnimationSpan> SpeechAnimationAnalyzer::flush() {
 
 void SpeechAnimationAnalyzer::reset() {
     initialized_ = false;
+    flushed_ = false;
     utterance_id_ = 0;
     next_sample_position_ = 0;
     sample_rate_ = 0;

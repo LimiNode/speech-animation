@@ -24,7 +24,8 @@ struct AnalyzerConfig {
 
     // Public spans are emitted on this media-clock hop. A non-zero sample
     // count takes precedence and is useful when an integration needs an exact
-    // hop; otherwise the duration is rounded once at utterance start.
+    // hop; otherwise the duration is rounded once at utterance start. The
+    // duration is validated only when sample count is zero.
     float output_hop_ms = 10.0F;
     std::uint32_t output_hop_samples = 0;
 
@@ -43,7 +44,8 @@ public:
     // a discontinuous/out-of-order sample position.
     std::vector<SpeechAnimationSpan> feed(const PcmChunk& chunk);
 
-    // Emits a final partial hop, if any. Repeated flush() calls are idempotent.
+    // Terminates the current utterance and emits a final partial hop, if any.
+    // Repeated flush() calls are idempotent; feed() requires reset() afterward.
     std::vector<SpeechAnimationSpan> flush();
 
     // Starts a fresh utterance and clears all causal state.
@@ -51,6 +53,7 @@ public:
 
     const AnalyzerConfig& config() const noexcept { return config_; }
     bool initialized() const noexcept { return initialized_; }
+    bool flushed() const noexcept { return flushed_; }
     std::uint32_t sample_rate() const noexcept { return sample_rate_; }
     std::uint64_t next_sample_position() const noexcept { return next_sample_position_; }
 
@@ -66,6 +69,7 @@ private:
 
     AnalyzerConfig config_;
     bool initialized_ = false;
+    bool flushed_ = false;
     std::uint64_t utterance_id_ = 0;
     std::uint64_t next_sample_position_ = 0;
     std::uint32_t sample_rate_ = 0;

@@ -24,10 +24,12 @@ chunks must be contiguous and ordered by `sample_begin`; a delayed callback does
 not affect the result, while an out-of-order chunk is rejected. Hop boundaries
 are anchored to the first accepted sample position and then advance by the
 configured sample count, never by input chunk boundaries. Call `reset()` between
-utterances. `flush()` emits at most one final partial hop and is idempotent.
+utterances. `flush()` terminates the current utterance, emits at most one final
+partial hop, and is idempotent; calling `feed()` afterward requires `reset()`.
 
 Set `AnalyzerConfig::output_hop_samples` for an exact hop, or use
-`output_hop_ms` (rounded once after the sample rate is known). The internal DSP
+`output_hop_ms` (rounded once after the sample rate is known). When exact sample
+count is set, `output_hop_ms` is ignored and may be zero. The internal DSP
 remains causal and has no look-ahead.
 
 Input is normalized floating-point PCM. Finite values outside `[-1, 1]` are

@@ -87,6 +87,25 @@ int main() {
         CHECK(no_flush.flush().size() == 1);
         CHECK(no_flush.flush().empty());
 
+        AnalyzerConfig exact_hop_zero_duration;
+        exact_hop_zero_duration.output_hop_samples = 4;
+        exact_hop_zero_duration.output_hop_ms = 0.0F;
+        SpeechAnimationAnalyzer lifecycle(exact_hop_zero_duration);
+        (void)lifecycle.feed(PcmChunk{8, 0, 48000, pcm.data(), 2});
+        CHECK(lifecycle.flush().size() == 1);
+        CHECK(lifecycle.flushed());
+        CHECK(lifecycle.flush().empty());
+        bool feed_after_flush_rejected = false;
+        try {
+            (void)lifecycle.feed(PcmChunk{8, 2, 48000, pcm.data(), 1});
+        } catch (const std::logic_error&) {
+            feed_after_flush_rejected = true;
+        }
+        CHECK(feed_after_flush_rejected);
+        lifecycle.reset();
+        CHECK(!lifecycle.flushed());
+        CHECK(lifecycle.feed(PcmChunk{9, 0, 48000, pcm.data(), 1}).empty());
+
         AnalyzerConfig unit_hop;
         unit_hop.output_hop_samples = 1;
         SpeechAnimationAnalyzer analyzer(unit_hop);

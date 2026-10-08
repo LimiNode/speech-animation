@@ -31,8 +31,10 @@ The fixed-hop public representation is the production-facing v0 shape. The
 benchmark compares 1-sample, 80-sample, 10 ms, 40 ms, and 80 ms input chunks;
 all produce the same sample-addressed hop timeline. A future adapter may choose
 a different hop, but it must remain anchored to the canonical sample clock.
-`flush()` emits one final partial hop when the utterance does not end on a hop
-boundary, then becomes idempotent.
+`flush()` is the terminal boundary for the current utterance: it emits one
+final partial hop when needed, then becomes idempotent. A subsequent `feed()`
+is rejected until `reset()`, so an intermediate flush cannot shift the hop
+grid.
 
 Progress evidence belongs to the predictive-viseme milestone, where its actual
 consumer and required fields can define the contract. The v0 core must not
