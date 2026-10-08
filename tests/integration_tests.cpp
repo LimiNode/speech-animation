@@ -68,7 +68,6 @@ int main() {
         CHECK(!terminal.empty());
         CHECK(terminal.back().terminal);
         CHECK(terminal.back().terminal_state == PipelineState::Cancelled);
-        CHECK(terminal.back().synthetic_terminal_tail);
         CHECK(terminal.back().activity == SpeechActivity::Silence);
         CHECK(terminal.back().mouth_open == 0.0F);
         CHECK(terminal.back().kind == SpeechAnimationReceiptKind::TerminalFade);
@@ -139,6 +138,49 @@ int main() {
         CHECK(no_pcm_receipts.front().terminal);
         CHECK(no_pcm_receipts.front().output_first_sample == 100);
         CHECK(no_pcm_receipts.front().output_sample_count == 0);
+
+        // Terminal reason is published atomically with terminal admission.
+        for (int iteration = 0; iteration < 25; ++iteration) {
+            SpeechAnimationPipeline raced(config);
+            CHECK(raced.begin(200 + static_cast<std::uint64_t>(iteration),
+                              0, 48000) == QueuePushResult::Accepted);
+            std::thread canceller([&raced]() {
+                (void)raced.cancel();
+            });
+            std::vector<SpeechAnimationReceipt> raced_receipts;
+            while (!raced.terminal() || raced_receipts.empty()) {
+                auto batch = raced.process_available();
+                raced_receipts.insert(raced_receipts.end(), batch.begin(), batch.end());
+                std::this_thread::yield();
+            }
+            auto late_cancel_batch = raced.process_available();
+            raced_receipts.insert(raced_receipts.end(), late_cancel_batch.begin(), late_cancel_batch.end());
+            canceller.join();
+            CHECK(!raced_receipts.empty());
+            CHECK(raced_receipts.back().terminal);
+            CHECK(raced_receipts.back().terminal_state == PipelineState::Cancelled);
+        }
+        for (int iteration = 0; iteration < 25; ++iteration) {
+            SpeechAnimationPipeline raced(config);
+            CHECK(raced.begin(300 + static_cast<std::uint64_t>(iteration),
+                              0, 48000) == QueuePushResult::Accepted);
+            std::thread completer([&raced]() {
+                (void)raced.complete();
+            });
+            std::vector<SpeechAnimationReceipt> raced_receipts;
+            while (!raced.terminal() || raced_receipts.empty()) {
+                auto batch = raced.process_available();
+                raced_receipts.insert(raced_receipts.end(), batch.begin(), batch.end());
+                std::this_thread::yield();
+            }
+            auto late_complete_batch = raced.process_available();
+            raced_receipts.insert(raced_receipts.end(),
+                                  late_complete_batch.begin(), late_complete_batch.end());
+            completer.join();
+            CHECK(!raced_receipts.empty());
+            CHECK(raced_receipts.back().terminal);
+            CHECK(raced_receipts.back().terminal_state == PipelineState::Completed);
+        }
 
         // Exercise the actual one-producer/one-consumer queue contract.
         PipelineConfig threaded_config = config;

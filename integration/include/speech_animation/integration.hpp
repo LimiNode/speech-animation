@@ -52,7 +52,6 @@ struct SpeechAnimationReceipt {
     float mouth_open = 0.0F;
     bool terminal = false;
     PipelineState terminal_state = PipelineState::Active;
-    bool synthetic_terminal_tail = false;
     std::uint32_t terminal_fade_sample_count = 0;
 
     std::string to_json() const;
@@ -98,7 +97,9 @@ public:
     bool complete();
     bool cancel();
 
-    bool terminal() const noexcept { return terminal_requested_.load(std::memory_order_acquire); }
+    bool terminal() const noexcept {
+        return state_.load(std::memory_order_acquire) != PipelineState::Active;
+    }
     PipelineState state() const noexcept { return state_.load(std::memory_order_acquire); }
     std::size_t queued_chunks() const noexcept;
     const PipelineConfig& config() const noexcept { return config_; }
@@ -111,6 +112,9 @@ private:
         std::uint64_t request_id,
         std::uint32_t sample_rate,
         const std::vector<SpeechAnimationSpan>& spans) const;
+    QueuePushResult begin_unlocked(std::uint64_t request_id,
+                                   std::uint64_t first_sample,
+                                   std::uint32_t sample_rate);
 
     PipelineConfig config_;
     SpeechAnimationAnalyzer analyzer_;
@@ -120,7 +124,6 @@ private:
     std::atomic<std::uint32_t> producers_in_flight_{0};
     std::uint64_t request_id_ = 0;
     bool request_initialized_ = false;
-    std::atomic<bool> terminal_requested_{false};
     bool terminal_emitted_ = false;
     std::atomic<PipelineState> state_{PipelineState::Active};
     std::uint32_t sample_rate_ = 0;

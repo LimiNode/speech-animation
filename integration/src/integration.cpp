@@ -58,8 +58,6 @@ std::string SpeechAnimationReceipt::to_json() const {
          << ",\"mouth_open\":" << mouth_open
          << ",\"terminal\":" << (terminal ? "true" : "false")
          << ",\"terminal_state\":\"" << state_name(terminal_state) << '"'
-         << ",\"synthetic_terminal_tail\":"
-         << (synthetic_terminal_tail ? "true" : "false")
          << ",\"terminal_fade_sample_count\":" << terminal_fade_sample_count << '}';
     return json.str();
 }
@@ -80,9 +78,9 @@ std::size_t SpeechAnimationPipeline::queued_chunks() const noexcept {
     return static_cast<std::size_t>(write - read);
 }
 
-QueuePushResult SpeechAnimationPipeline::begin(std::uint64_t request_id,
-                                               std::uint64_t first_sample,
-                                               std::uint32_t sample_rate) {
+QueuePushResult SpeechAnimationPipeline::begin_unlocked(std::uint64_t request_id,
+                                                        std::uint64_t first_sample,
+                                                        std::uint32_t sample_rate) {
     if (terminal()) {
         return QueuePushResult::RejectedTerminal;
     }
@@ -98,6 +96,13 @@ QueuePushResult SpeechAnimationPipeline::begin(std::uint64_t request_id,
     published_sample_rate_.store(sample_rate, std::memory_order_release);
     published_next_sample_.store(first_sample, std::memory_order_release);
     return QueuePushResult::Accepted;
+}
+
+QueuePushResult SpeechAnimationPipeline::begin(std::uint64_t request_id,
+                                               std::uint64_t first_sample,
+                                               std::uint32_t sample_rate) {
+    ProducerGuard producer_guard(producers_in_flight_);
+    return begin_unlocked(request_id, first_sample, sample_rate);
 }
 
 QueuePushResult SpeechAnimationPipeline::push(SpeechTimingChunk chunk) {
@@ -129,7 +134,9 @@ QueuePushResult SpeechAnimationPipeline::push(SpeechTimingChunk chunk) {
         return QueuePushResult::Full;
     }
     if (!request_initialized_) {
-        const auto result = begin(chunk.request_id, chunk.first_sample, chunk.sample_rate);
+        const auto result = begin_unlocked(chunk.request_id,
+                                           chunk.first_sample,
+                                           chunk.sample_rate);
         if (result != QueuePushResult::Accepted) {
             return result;
         }
@@ -202,23 +209,15 @@ std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::process_available()
 }
 
 bool SpeechAnimationPipeline::complete() {
-    bool expected = false;
-    if (!terminal_requested_.compare_exchange_strong(expected, true,
-                                                     std::memory_order_acq_rel)) {
-        return false;
-    }
-    state_.store(PipelineState::Completed, std::memory_order_release);
-    return true;
+    auto expected = PipelineState::Active;
+    return state_.compare_exchange_strong(expected, PipelineState::Completed,
+                                          std::memory_order_acq_rel);
 }
 
 bool SpeechAnimationPipeline::cancel() {
-    bool expected = false;
-    if (!terminal_requested_.compare_exchange_strong(expected, true,
-                                                     std::memory_order_acq_rel)) {
-        return false;
-    }
-    state_.store(PipelineState::Cancelled, std::memory_order_release);
-    return true;
+    auto expected = PipelineState::Active;
+    return state_.compare_exchange_strong(expected, PipelineState::Cancelled,
+                                          std::memory_order_acq_rel);
 }
 
 std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::process_chunk(
@@ -272,7 +271,6 @@ std::vector<SpeechAnimationReceipt> SpeechAnimationPipeline::emit_terminal_fade(
     fade.mouth_open = 0.0F;
     fade.terminal = true;
     fade.terminal_state = state();
-    fade.synthetic_terminal_tail = true;
     fade.terminal_fade_sample_count = terminal_fade_sample_count(sample_rate);
     receipts.push_back(fade);
     terminal_emitted_ = true;

@@ -37,5 +37,5 @@ zero actual audio output.
 
 `SpeechAnimationReceipt::to_json()` emits machine-readable records containing
 request ID, input range, output range, sample rate, activity, mouth opening, and
-terminal/tail markers. A bridge can write these records as JSONL without making
+terminal/fade markers. A bridge can write these records as JSONL without making
 the generic core aware of its own callback or request types.
