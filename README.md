@@ -41,6 +41,16 @@ audio-reactive evidence, not a phoneme claim. Predictive pronunciation and
 acoustic-alignment providers can be layered on later without changing the PCM
 clock or importing a backend into core.
 
+## Predictive pronunciation contract
+
+`SpeechContext` and `PredictiveVisemePlanner` provide the first predictive
+viseme seam without pretending to be a phoneme recognizer. An application or
+pronunciation provider supplies an ordered `PredictedVisemeSpec` sequence;
+the planner validates it, allocates positive duration weights over the known
+utterance sample count, and returns contiguous sample-addressed cues. These
+cues are marked `PredictedPronunciation`; PCM remains the causal timing
+evidence and no look-ahead or forced aligner is introduced.
+
 To run the chunk-sensitivity benchmark:
 
 ```powershell

@@ -36,9 +36,12 @@ final partial hop when needed, then becomes idempotent. A subsequent `feed()`
 is rejected until `reset()`, so an intermediate flush cannot shift the hop
 grid.
 
-Progress evidence belongs to the predictive-viseme milestone, where its actual
-consumer and required fields can define the contract. The v0 core must not
-include Qwen, PocketTTS, xVibe, Unity, Godot, VRM, or Live2D headers.
+The predictive-viseme contract now lives in `predictive.hpp`: a pronunciation
+provider supplies an ordered viseme sequence and relative duration weights,
+then `PredictiveVisemePlanner` allocates contiguous sample-addressed cues and
+can annotate analyzer spans by overlap. It deliberately does not parse text,
+infer phonemes, add look-ahead, or include Qwen, PocketTTS, xVibe, Unity, Godot,
+VRM, or Live2D headers. Acoustic alignment remains a later evidence upgrade.
 
 The optional application integration layer in `integration/` maps neutral
 `SpeechTimingChunk` values into `PcmChunk`, drains them through a bounded
