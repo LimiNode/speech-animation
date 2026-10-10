@@ -8,6 +8,7 @@ option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF
 
 add_library(speech_animation
     core/src/analyzer.cpp
+    core/src/predictive.cpp
 )
 add_library(speech_animation::speech_animation ALIAS speech_animation)
 
@@ -45,6 +46,10 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
     add_executable(speech_animation_tests tests/analyzer_tests.cpp)
     target_link_libraries(speech_animation_tests PRIVATE speech_animation::speech_animation)
     add_test(NAME speech_animation_tests COMMAND speech_animation_tests)
+
+    add_executable(speech_animation_predictive_tests tests/predictive_tests.cpp)
+    target_link_libraries(speech_animation_predictive_tests PRIVATE speech_animation::speech_animation)
+    add_test(NAME speech_animation_predictive_tests COMMAND speech_animation_predictive_tests)
 
     add_executable(speech_animation_integration_tests tests/integration_tests.cpp)
     target_link_libraries(speech_animation_integration_tests PRIVATE
