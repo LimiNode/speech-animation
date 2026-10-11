@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,8 @@ struct PlaybackAnimationSelection {
     float mouth_open = 0.0F;
     bool terminal = false;
     float terminal_fade_progress = 0.0F;
+    // Number of cue ranges crossed since the previously selected cue. On the
+    // first selection this is the number of ranges before the cursor.
     std::size_t skipped_cue_count = 0;
 
     std::string to_json() const;
@@ -85,6 +88,7 @@ private:
     bool initialized_ = false;
     bool terminal_received_ = false;
     std::vector<SpeechAnimationReceipt> cues_;
+    mutable std::optional<std::size_t> last_selected_cue_index_;
 };
 
 } // namespace speech_animation::integration
