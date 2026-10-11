@@ -53,6 +53,7 @@ void PlaybackLockedCueSelector::reset(
     initialized_ = false;
     terminal_received_ = false;
     cues_.clear();
+    last_selected_cue_index_.reset();
 }
 
 bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
@@ -122,7 +123,15 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
         return result;
     }
     std::size_t skipped = 0;
-    for (const auto& cue : cues_) {
+    for (std::size_t index = 0; index < cues_.size(); ++index) {
+        const auto& cue = cues_[index];
+        const auto skipped_since_previous = [&]() {
+            if (!last_selected_cue_index_.has_value() ||
+                index <= last_selected_cue_index_.value() + 1) {
+                return last_selected_cue_index_.has_value() ? std::size_t{0} : index;
+            }
+            return index - last_selected_cue_index_.value() - 1;
+        }();
         if (cue.kind == SpeechAnimationReceiptKind::TerminalFade) {
             const auto fade_end = cue.input_first_sample + cue.terminal_fade_sample_count;
             if (snapshot.utterance_sample < cue.input_first_sample) {
@@ -138,12 +147,14 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
                         static_cast<float>(cue.terminal_fade_sample_count),
                     0.0F,
                     1.0F);
-                result.skipped_cue_count = skipped;
+                result.skipped_cue_count = skipped_since_previous;
+                last_selected_cue_index_ = index;
                 return result;
             }
             result.status = PlaybackSelectionStatus::TerminalComplete;
             result.terminal = true;
-            result.skipped_cue_count = skipped;
+            result.skipped_cue_count = skipped_since_previous;
+            last_selected_cue_index_ = index;
             return result;
         }
         const auto cue_end = cue.output_first_sample + cue.output_sample_count;
@@ -151,7 +162,7 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
             result.status = skipped == 0
                 ? PlaybackSelectionStatus::BeforeFirstCue
                 : PlaybackSelectionStatus::AfterLastCue;
-            result.skipped_cue_count = skipped;
+            result.skipped_cue_count = skipped_since_previous;
             return result;
         }
         if (snapshot.utterance_sample < cue_end) {
@@ -162,7 +173,8 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
             result.activity = cue.activity;
             result.mouth_open = cue.mouth_open;
             result.terminal = false;
-            result.skipped_cue_count = skipped;
+            result.skipped_cue_count = skipped_since_previous;
+            last_selected_cue_index_ = index;
             return result;
         }
         ++skipped;

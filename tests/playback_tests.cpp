@@ -57,7 +57,18 @@ int main() {
     const auto second = selector.select(cursor(7, 42, 250));
     assert(second.status == PlaybackSelectionStatus::Selected);
     assert(second.mouth_open == 0.75F);
-    assert(second.skipped_cue_count == 1);
+    assert(second.skipped_cue_count == 0);
+
+    selector.reset(7, 42);
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    assert(selector.append(audio(42, 200, 100, 0.75F)));
+    assert(selector.append(audio(42, 300, 100, 0.5F)));
+    assert(selector.select(cursor(7, 42, 150)).skipped_cue_count == 0);
+    assert(selector.select(cursor(7, 42, 350)).skipped_cue_count == 1);
+    selector.reset(7, 42);
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    assert(selector.append(audio(42, 200, 100, 0.75F)));
+    assert(selector.append(fade(42, 300)));
 
     const auto fading = selector.select(cursor(7, 42, 350));
     assert(fading.status == PlaybackSelectionStatus::TerminalFade);
