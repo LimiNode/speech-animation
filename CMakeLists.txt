@@ -14,6 +14,7 @@ add_library(speech_animation::speech_animation ALIAS speech_animation)
 
 add_library(speech_animation_integration
     integration/src/integration.cpp
+    integration/src/playback.cpp
 )
 add_library(speech_animation::integration ALIAS speech_animation_integration)
 
@@ -55,6 +56,11 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
     target_link_libraries(speech_animation_integration_tests PRIVATE
         speech_animation::integration Threads::Threads)
     add_test(NAME speech_animation_integration_tests COMMAND speech_animation_integration_tests)
+
+    add_executable(speech_animation_playback_tests tests/playback_tests.cpp)
+    target_link_libraries(speech_animation_playback_tests PRIVATE
+        speech_animation::integration)
+    add_test(NAME speech_animation_playback_tests COMMAND speech_animation_playback_tests)
 endif()
 
 if(SPEECH_ANIMATION_BUILD_BENCHMARKS)

@@ -67,3 +67,8 @@ the returned `SpeechAnimationReceipt` values with `to_json()`. `complete()` and
 anchored at the next sample position; no synthetic PCM is inserted into the
 playback timeline. Call `begin()` when a request may terminate before its first
 PCM chunk; late chunks are rejected.
+
+`PlaybackLockedCueSelector` consumes those sample-addressed receipts using a
+sink-provided `PlaybackCursorSnapshot`. It scopes every selection by playback
+epoch and request ID, treats unavailable or stale cursors as neutral, and
+exposes terminal-fade progress without adding samples to the audio timeline.
