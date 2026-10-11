@@ -22,7 +22,12 @@ callback wall-clock timestamp is observed.
 `process_available()` is the consumer-side operation and is the only place that
 calls the analyzer. Therefore analyzer work is outside the audio callback and
 does not delay playback. Presentation uses the returned sample-addressed spans
-against the actual playback sample cursor.
+against the actual playback sample cursor. `PlaybackLockedCueSelector` is the
+engine-neutral consumer for that final step: it accepts an epoch/request-scoped
+cursor snapshot, returns the cue covering the current sample, and returns a
+neutral selection when the cursor is unavailable, stale, before/after the
+available ranges, or already past a terminal fade. It never uses callback wall
+clock timestamps or interpolates across a gap.
 
 `complete()` and `cancel()` first drain already accepted chunks. They then emit
 exactly one `TerminalFade` receipt anchored at the next canonical sample
@@ -39,3 +44,7 @@ zero actual audio output.
 request ID, input range, output range, sample rate, activity, mouth opening, and
 terminal/fade markers. A bridge can write these records as JSONL without making
 the generic core aware of its own callback or request types.
+
+`PlaybackCursorSnapshot` is deliberately supplied by the playback sink. A
+WinMM/WaveOut adapter may populate it from `waveOutGetPosition(TIME_SAMPLES)`;
+the generic library does not depend on WinMM or any other audio API.
