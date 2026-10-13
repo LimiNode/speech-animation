@@ -1,5 +1,6 @@
 #include <speech_animation/speech_animation.hpp>
 
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -39,6 +40,31 @@ int main() {
         CHECK(empty.estimate.confidence < 1.0F);
         CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"sil", 1.0F, 1.0F}).estimate.value == Viseme::Closed);
 
+        struct CyrillicVowelCase {
+            const char* symbol;
+            Viseme value;
+            float confidence_multiplier;
+        };
+        const CyrillicVowelCase vowel_cases[] = {
+            {"\xD0\xB0", Viseme::A, 1.0F},   // а
+            {"\xD1\x8D", Viseme::E, 1.0F},   // э
+            {"\xD0\xB5", Viseme::E, 0.75F},  // е
+            {"\xD1\x91", Viseme::O, 0.75F},  // ё
+            {"\xD0\xB8", Viseme::I, 1.0F},   // и
+            {"\xD1\x8B", Viseme::I, 0.75F},  // ы
+            {"\xD0\xBE", Viseme::O, 1.0F},   // о
+            {"\xD1\x83", Viseme::U, 1.0F},   // у
+            {"\xD1\x8E", Viseme::U, 0.75F},  // ю
+            {"\xD1\x8F", Viseme::A, 0.75F},  // я
+        };
+        for (const auto& vowel_case : vowel_cases) {
+            const auto estimate = PronunciationVisemeMapper::map(
+                PronunciationUnit{vowel_case.symbol, 1.0F, 1.0F}).estimate;
+            CHECK(estimate.value == vowel_case.value);
+            CHECK(std::fabs(estimate.confidence - vowel_case.confidence_multiplier) < 1.0e-6F);
+            CHECK(estimate.evidence == AnimationEvidence::PredictedPronunciation);
+        }
+
         PredictiveVisemePlanner mapped_planner(SpeechContext{41, 48000, 800, "mafa"});
         const auto mapped_cues = mapped_planner.plan(mapped);
         CHECK(mapped_cues.size() == mapped.size());
@@ -66,7 +92,12 @@ int main() {
         CHECK(offset_cues.front().sample_begin == 2000);
         const SpeechAnimationSpan offset_span{43, 2000, 100, 48000, 0.0F, 0.0F,
                                               std::nullopt, SpeechActivity::Active};
-        CHECK(offset_planner.annotate(offset_span, offset_cues).viseme.has_value());
+        const auto offset_annotated = offset_planner.annotate(offset_span, offset_cues);
+        CHECK(offset_annotated.viseme.has_value());
+        CHECK(offset_annotated.viseme->value == Viseme::A);
+        CHECK(offset_annotated.sample_begin == offset_span.sample_begin);
+        CHECK(offset_annotated.sample_count == offset_span.sample_count);
+        CHECK(offset_annotated.sample_rate == offset_span.sample_rate);
 
         SpeechAnimationSpan span{42, 600, 100, 48000, 0.0F, 0.0F, std::nullopt,
                                  SpeechActivity::Active};
