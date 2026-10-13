@@ -1,7 +1,6 @@
 #include "speech_animation/predictive.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <initializer_list>
 #include <limits>
@@ -20,7 +19,11 @@ float clamp01(float value) noexcept {
 
 std::string ascii_lower(std::string value) {
     for (char& character : value) {
-        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte >= static_cast<unsigned char>('A') &&
+            byte <= static_cast<unsigned char>('Z')) {
+            character = static_cast<char>(byte + ('a' - 'A'));
+        }
     }
     return value;
 }
@@ -61,26 +64,47 @@ PredictedVisemeSpec PronunciationVisemeMapper::map(const PronunciationUnit& unit
         : 1.0F;
 
     // Providers may use ASCII phoneme names (for example ARPAbet-like vowel
-    // labels) or UTF-8 symbols. UTF-8 symbols are kept in the provider layer;
-    // the conservative ASCII aliases below are sufficient for the generic
-    // core and avoid locale-dependent case conversion.
-    if (symbol.empty() || is_any(symbol, {"sil", "sp", "pau", "pause", "<sil>"})) {
+    // labels) or UTF-8 Cyrillic letters. Cyrillic letters are only an
+    // approximate spelling-level input: they are not confirmed phonemes, and
+    // context-dependent iotated vowels receive reduced confidence.
+    if (symbol.empty()) {
+        result.estimate.value = Viseme::Neutral;
+        result.estimate.confidence *= 0.25F;
+    } else if (is_any(symbol, {"sil", "sp", "pau", "pause", "<sil>"})) {
         result.estimate.value = Viseme::Closed;
         result.estimate.confidence *= 0.75F;
     } else if (is_any(symbol, {"p", "b", "m", "pcl", "bcl", "mcl"})) {
         result.estimate.value = Viseme::Closed;
     } else if (is_any(symbol, {"f", "v", "fcl", "vcl"})) {
         result.estimate.value = Viseme::FV;
-    } else if (is_any(symbol, {"a", "aa", "ah", "\xD0\xB0", "\xD1\x8F"})) {
+    } else if (is_any(symbol, {"a", "aa", "ah", "\xD0\xB0"})) {
         result.estimate.value = Viseme::A;
-    } else if (is_any(symbol, {"e", "ee", "eh", "ey", "\xD1\x8D", "\xD0\xB5", "\xD1\x91"})) {
+    } else if (is_any(symbol, {"\xD1\x8F"})) {
+        result.estimate.value = Viseme::A;
+        result.estimate.confidence *= 0.75F;
+    } else if (is_any(symbol, {"e", "ee", "eh", "ey", "\xD1\x8D"})) {
         result.estimate.value = Viseme::E;
-    } else if (is_any(symbol, {"i", "ih", "iy", "\xD0\xB8", "\xD0\xB9"})) {
+    } else if (is_any(symbol, {"\xD0\xB5"})) {
+        result.estimate.value = Viseme::E;
+        result.estimate.confidence *= 0.75F;
+    } else if (is_any(symbol, {"i", "ih", "iy", "\xD0\xB8"})) {
         result.estimate.value = Viseme::I;
+    } else if (is_any(symbol, {"\xD1\x8B"})) {
+        result.estimate.value = Viseme::I;
+        result.estimate.confidence *= 0.75F;
+    } else if (is_any(symbol, {"\xD0\xB9"})) {
+        result.estimate.value = Viseme::Neutral;
+        result.estimate.confidence *= 0.35F;
     } else if (is_any(symbol, {"o", "ao", "ow", "\xD0\xBE"})) {
         result.estimate.value = Viseme::O;
-    } else if (is_any(symbol, {"u", "uh", "uw", "\xD1\x83", "\xD1\x8E"})) {
+    } else if (is_any(symbol, {"\xD1\x91"})) {
+        result.estimate.value = Viseme::O;
+        result.estimate.confidence *= 0.75F;
+    } else if (is_any(symbol, {"u", "uh", "uw", "\xD1\x83"})) {
         result.estimate.value = Viseme::U;
+    } else if (is_any(symbol, {"\xD1\x8E"})) {
+        result.estimate.value = Viseme::U;
+        result.estimate.confidence *= 0.75F;
     } else {
         result.estimate.value = Viseme::Neutral;
         result.estimate.confidence *= 0.35F;

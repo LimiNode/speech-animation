@@ -60,6 +60,12 @@ those symbols to the small semantic `Viseme` taxonomy. The mapper is
 conservative: unsupported symbols become low-confidence `Neutral`, and no
 audio amplitude is treated as phoneme evidence.
 
+ASCII normalization changes only `A`-`Z`; all other bytes, including UTF-8,
+are preserved byte-for-byte. An empty pronunciation symbol is unknown rather
+than silence. Explicit pause markers map to low-confidence `Closed`, while
+Cyrillic spelling-level approximations use reduced confidence where context
+can change the underlying phonetics; `й` is a low-confidence `Neutral` glide.
+
 `PredictiveVisemePlanner` then consumes the resulting
 `PredictedVisemeSpec` sequence together with a `SpeechContext` containing the
 known PCM duration. It emits contiguous `PredictedVisemeCue` records on the
