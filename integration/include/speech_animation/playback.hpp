@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -63,7 +64,14 @@ struct PlaybackAnimationSelection {
 /// `SpeechAnimationPipeline`; malformed or out-of-order receipts are rejected.
 class PlaybackLockedCueSelector final {
 public:
-    PlaybackLockedCueSelector() = default;
+    /// Creates a selector with a bounded cue history.
+    ///
+    /// The history keeps the currently selected cue and any producer-ahead
+    /// cues. Once the playback cursor advances, older ranges are retired.
+    /// If the producer gets more than `max_cue_count` ranges ahead while the
+    /// cursor is unavailable, `append()` fails closed instead of growing
+    /// without a bound.
+    explicit PlaybackLockedCueSelector(std::size_t max_cue_count = 4096);
 
     PlaybackLockedCueSelector(const PlaybackLockedCueSelector&) = delete;
     PlaybackLockedCueSelector& operator=(const PlaybackLockedCueSelector&) = delete;
@@ -78,6 +86,7 @@ public:
     PlaybackAnimationSelection select(const PlaybackCursorSnapshot& snapshot) const;
 
     std::size_t cue_count() const noexcept { return cues_.size(); }
+    std::size_t max_cue_count() const noexcept { return max_cue_count_; }
     bool terminal_received() const noexcept { return terminal_received_; }
 
 private:
@@ -87,8 +96,12 @@ private:
     std::uint64_t next_sample_ = 0;
     bool initialized_ = false;
     bool terminal_received_ = false;
-    std::vector<SpeechAnimationReceipt> cues_;
+    std::size_t max_cue_count_ = 4096;
+    mutable std::deque<SpeechAnimationReceipt> cues_;
     mutable std::optional<std::size_t> last_selected_cue_index_;
+
+    void retire_before(std::size_t index) const;
+    bool make_room_for_append();
 };
 
 } // namespace speech_animation::integration

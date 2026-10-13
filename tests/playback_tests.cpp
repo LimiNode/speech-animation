@@ -1,6 +1,7 @@
 #include "speech_animation/playback.hpp"
 
 #include <cassert>
+#include <stdexcept>
 
 using namespace speech_animation::integration;
 
@@ -87,5 +88,26 @@ int main() {
     assert(selector.select(cursor(7, 42, 150)).status ==
         PlaybackSelectionStatus::StaleEpoch);
     assert(!selector.append(audio(42, 100, 100, 1.0F)));
+
+    PlaybackLockedCueSelector bounded(2);
+    bounded.reset(9, 99);
+    assert(bounded.append(audio(99, 0, 100, 0.1F)));
+    assert(bounded.append(audio(99, 100, 100, 0.2F)));
+    assert(!bounded.append(audio(99, 200, 100, 0.3F)));
+    assert(bounded.cue_count() == 2);
+    assert(bounded.select(cursor(9, 99, 50)).mouth_open == 0.1F);
+    assert(bounded.select(cursor(9, 99, 150)).mouth_open == 0.2F);
+    assert(bounded.cue_count() == 1);
+    assert(bounded.append(audio(99, 200, 100, 0.3F)));
+    assert(bounded.cue_count() == 2);
+
+    bool rejected_zero_bound = false;
+    try {
+        PlaybackLockedCueSelector invalid(0);
+    }
+    catch (const std::invalid_argument&) {
+        rejected_zero_bound = true;
+    }
+    assert(rejected_zero_bound);
     return 0;
 }
