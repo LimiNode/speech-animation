@@ -30,6 +30,14 @@ int main() {
         CHECK(mapped[1].estimate.evidence == AnimationEvidence::PredictedPronunciation);
         CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD0\xB0", 1.0F, 1.0F}).estimate.value == Viseme::A);
         CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD0\xBE", 1.0F, 1.0F}).estimate.value == Viseme::O);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD1\x8B", 1.0F, 1.0F}).estimate.value == Viseme::I);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD0\xB9", 1.0F, 1.0F}).estimate.value == Viseme::Neutral);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"A", 1.0F, 1.0F}).estimate.value == Viseme::A);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD0\x90", 1.0F, 1.0F}).estimate.value == Viseme::Neutral);
+        const auto empty = PronunciationVisemeMapper::map(PronunciationUnit{"", 1.0F, 1.0F});
+        CHECK(empty.estimate.value == Viseme::Neutral);
+        CHECK(empty.estimate.confidence < 1.0F);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"sil", 1.0F, 1.0F}).estimate.value == Viseme::Closed);
 
         PredictiveVisemePlanner mapped_planner(SpeechContext{41, 48000, 800, "mafa"});
         const auto mapped_cues = mapped_planner.plan(mapped);
@@ -56,6 +64,9 @@ int main() {
             {{Viseme::A, 1.0F, AnimationEvidence::PredictedPronunciation}, 1.0F},
         });
         CHECK(offset_cues.front().sample_begin == 2000);
+        const SpeechAnimationSpan offset_span{43, 2000, 100, 48000, 0.0F, 0.0F,
+                                              std::nullopt, SpeechActivity::Active};
+        CHECK(offset_planner.annotate(offset_span, offset_cues).viseme.has_value());
 
         SpeechAnimationSpan span{42, 600, 100, 48000, 0.0F, 0.0F, std::nullopt,
                                  SpeechActivity::Active};

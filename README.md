@@ -56,9 +56,13 @@ convert neutral `PronunciationUnit` symbols with
 `PronunciationVisemeMapper::map_sequence()` before passing the resulting specs
 to the planner. Unsupported symbols intentionally become low-confidence
 `Neutral` estimates, so a presentation layer can fall back to the
-audio-reactive mouth signal. This mapper is not a TTS, G2P, or forced-aligner
-implementation; backend-specific prepared-text conversion remains outside the
-core.
+audio-reactive mouth signal. An empty symbol is also treated as unknown;
+silence must be represented explicitly (`sil`, `sp`, or `pau`) and maps to a
+low-confidence `Closed` estimate. Cyrillic letter mappings are spelling-level
+approximations, with reduced confidence for context-dependent letters and
+`й` represented as low-confidence `Neutral`. This mapper is not a TTS, G2P,
+or forced-aligner implementation; backend-specific prepared-text conversion
+remains outside the core.
 
 To run the chunk-sensitivity benchmark:
 
