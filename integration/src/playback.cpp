@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 
 namespace speech_animation::integration {
 namespace {
@@ -23,6 +24,39 @@ const char* status_name(PlaybackSelectionStatus status) noexcept {
 }
 
 } // namespace
+
+PlaybackLockedCueSelector::PlaybackLockedCueSelector(std::size_t max_cue_count)
+    : max_cue_count_(max_cue_count) {
+    if (max_cue_count_ == 0) {
+        throw std::invalid_argument("playback cue history bound must be greater than zero");
+    }
+}
+
+void PlaybackLockedCueSelector::retire_before(std::size_t index) const {
+    const auto retired = std::min(index, cues_.size());
+    for (std::size_t count = 0; count < retired; ++count) {
+        cues_.pop_front();
+    }
+    if (last_selected_cue_index_.has_value()) {
+        if (last_selected_cue_index_.value() < retired) {
+            last_selected_cue_index_ = 0;
+        }
+        else {
+            last_selected_cue_index_ = last_selected_cue_index_.value() - retired;
+        }
+    }
+}
+
+bool PlaybackLockedCueSelector::make_room_for_append() {
+    if (cues_.size() < max_cue_count_) {
+        return true;
+    }
+    if (last_selected_cue_index_.has_value() &&
+        last_selected_cue_index_.value() != 0) {
+        retire_before(last_selected_cue_index_.value());
+    }
+    return cues_.size() < max_cue_count_;
+}
 
 std::string PlaybackAnimationSelection::to_json() const {
     std::ostringstream json;
@@ -69,13 +103,16 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
                 std::numeric_limits<std::uint64_t>::max() - receipt.output_sample_count) {
             return false;
         }
-        if (!initialized_) {
-            next_sample_ = receipt.output_first_sample;
-            initialized_ = true;
-        }
-        sample_rate_ = receipt.sample_rate;
-        next_sample_ = receipt.output_first_sample + receipt.output_sample_count;
-        cues_.push_back(receipt);
+    if (!initialized_) {
+        next_sample_ = receipt.output_first_sample;
+        initialized_ = true;
+    }
+    if (!make_room_for_append()) {
+        return false;
+    }
+    sample_rate_ = receipt.sample_rate;
+    next_sample_ = receipt.output_first_sample + receipt.output_sample_count;
+    cues_.push_back(receipt);
         return true;
     }
 
@@ -91,6 +128,9 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
     if (!initialized_) {
         next_sample_ = receipt.input_first_sample;
         initialized_ = true;
+    }
+    if (!make_room_for_append()) {
+        return false;
     }
     sample_rate_ = receipt.sample_rate;
     next_sample_ = receipt.input_first_sample;
@@ -148,7 +188,8 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
                     0.0F,
                     1.0F);
                 result.skipped_cue_count = skipped_since_previous;
-                last_selected_cue_index_ = index;
+                retire_before(index);
+                last_selected_cue_index_ = 0;
                 return result;
             }
             result.status = PlaybackSelectionStatus::TerminalComplete;
@@ -174,7 +215,8 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
             result.mouth_open = cue.mouth_open;
             result.terminal = false;
             result.skipped_cue_count = skipped_since_previous;
-            last_selected_cue_index_ = index;
+            retire_before(index);
+            last_selected_cue_index_ = 0;
             return result;
         }
         ++skipped;
