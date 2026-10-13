@@ -78,3 +78,34 @@ with an unknown final duration, PCM-driven correction, and acoustic alignment
 remain later stages. A presentation consumer must treat these cues as
 tentative and fall back to the audio-reactive signal when no reliable
 prediction is available.
+
+## Online planner policy
+
+`OnlinePredictiveVisemePlanner` adds the streaming placement stage without
+changing the full-duration planner or playback selector. It is a stateful,
+consumer-side component with `begin()`, `observe_samples()`, `complete()`,
+`cancel()`, and `reset()` lifecycle methods. It receives sample ranges rather
+than PCM buffers and never reads callback arrival time. Every mutating event
+also carries the `utterance_id` supplied to `begin()`, so delayed callbacks
+from an older generation are rejected even when their sample offsets happen
+to match a new utterance. Request/epoch ownership remains the integration
+layer's responsibility; this ID fence is the core's local guard. `reset()` is
+owner-controlled lifecycle state rather than an event accepted from an audio
+callback, so delayed callbacks must never reset the planner. Adapters must
+provide a unique ID for each generation and must not recycle an old ID while
+callbacks from that generation can still be in flight.
+
+The caller supplies an explicit `samples_per_weight` hint. This is a nominal
+provisional timing policy, not an acoustic duration claim; a zero hint is
+rejected. Nominal intervals are calculated once at `begin()`, while
+`observe_samples()` advances an observed PCM frontier and publishes only full
+intervals that are now observed. A partial current interval is held until
+completion, where it may be emitted clipped to the observed frontier. No
+published interval is ever retimed, duplicated, or emitted beyond observed
+PCM. If pronunciation ends before audio, the remainder is uncovered for
+audio-reactive fallback; if audio ends first, future pronunciation units are
+dropped rather than stretched into nonexistent samples.
+
+All emitted estimates retain `PredictedPronunciation` evidence. The planner
+does not perform G2P, phoneme parsing, acoustic alignment, PCM correction, or
+playback timing estimation, and it performs no blocking or background work.

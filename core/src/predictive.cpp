@@ -216,4 +216,157 @@ SpeechAnimationSpan PredictiveVisemePlanner::annotate(
     return result;
 }
 
+OnlinePredictiveVisemePlanner::OnlinePredictiveVisemePlanner(
+    OnlinePredictiveVisemePolicy policy)
+    : policy_(policy) {
+    if (policy_.max_prediction_units == 0) {
+        throw std::invalid_argument("online planner prediction capacity must be positive");
+    }
+}
+
+void OnlinePredictiveVisemePlanner::begin(
+    std::uint64_t utterance_id,
+    std::uint32_t sample_rate,
+    std::uint64_t first_sample,
+    const std::vector<PredictedVisemeSpec>& sequence) {
+    if (state_ != OnlinePredictiveVisemeState::Idle) {
+        throw std::logic_error("online planner requires reset before begin");
+    }
+    if (utterance_id == 0 || sample_rate == 0 || policy_.samples_per_weight == 0) {
+        throw std::invalid_argument(
+            "online planner requires utterance, sample rate, and samples_per_weight");
+    }
+    if (sequence.empty() || sequence.size() > policy_.max_prediction_units) {
+        throw std::invalid_argument("invalid online pronunciation sequence length");
+    }
+
+    std::vector<Segment> planned;
+    planned.reserve(sequence.size());
+    std::uint64_t position = first_sample;
+    for (const auto& spec : sequence) {
+        validate_estimate(spec.estimate);
+        if (!std::isfinite(spec.duration_weight) || spec.duration_weight <= 0.0F) {
+            throw std::invalid_argument("online planner duration weight must be positive");
+        }
+        const long double nominal = static_cast<long double>(spec.duration_weight) *
+                                    static_cast<long double>(policy_.samples_per_weight);
+        if (!std::isfinite(nominal) ||
+            nominal > static_cast<long double>(std::numeric_limits<std::uint32_t>::max())) {
+            throw std::invalid_argument("online planner duration hint is too large");
+        }
+        const auto rounded = static_cast<std::uint64_t>(std::floor(nominal + 0.5L));
+        const auto count = static_cast<std::uint32_t>(std::max<std::uint64_t>(1, rounded));
+        if (position > std::numeric_limits<std::uint64_t>::max() - count) {
+            throw std::invalid_argument("online planner sample range overflows");
+        }
+        planned.push_back({position, count, spec.estimate});
+        position += count;
+    }
+
+    // Commit only after every input has passed validation. A rejected begin
+    // therefore leaves the planner Idle and reusable.
+    segments_ = std::move(planned);
+    utterance_id_ = utterance_id;
+    sample_rate_ = sample_rate;
+    first_sample_ = first_sample;
+    observed_end_ = first_sample;
+    published_end_ = first_sample;
+    next_segment_ = 0;
+    state_ = OnlinePredictiveVisemeState::Active;
+}
+
+std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::observe_samples(
+    std::uint64_t utterance_id,
+    std::uint64_t first_sample,
+    std::uint32_t sample_count) {
+    validate_event_utterance(utterance_id);
+    if (state_ != OnlinePredictiveVisemeState::Active) {
+        throw std::logic_error("online planner is not active");
+    }
+    if (sample_count == 0 || first_sample != observed_end_ ||
+        first_sample > std::numeric_limits<std::uint64_t>::max() - sample_count) {
+        throw std::invalid_argument("online PCM range is not contiguous or overflows");
+    }
+    observed_end_ = first_sample + sample_count;
+    return publish_available(observed_end_, false);
+}
+
+std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::complete(
+    std::uint64_t utterance_id) {
+    validate_event_utterance(utterance_id);
+    if (state_ == OnlinePredictiveVisemeState::Idle) {
+        throw std::logic_error("online planner has no active utterance");
+    }
+    if (state_ != OnlinePredictiveVisemeState::Active) {
+        return {};
+    }
+    auto result = publish_available(observed_end_, true);
+    state_ = OnlinePredictiveVisemeState::Completed;
+    return result;
+}
+
+void OnlinePredictiveVisemePlanner::cancel(std::uint64_t utterance_id) {
+    validate_event_utterance(utterance_id);
+    if (state_ == OnlinePredictiveVisemeState::Idle) {
+        throw std::logic_error("online planner has no active utterance");
+    }
+    if (state_ == OnlinePredictiveVisemeState::Active) {
+        state_ = OnlinePredictiveVisemeState::Cancelled;
+        segments_.clear();
+        next_segment_ = 0;
+    }
+}
+
+void OnlinePredictiveVisemePlanner::reset() noexcept {
+    state_ = OnlinePredictiveVisemeState::Idle;
+    utterance_id_ = 0;
+    sample_rate_ = 0;
+    first_sample_ = 0;
+    observed_end_ = 0;
+    published_end_ = 0;
+    segments_.clear();
+    next_segment_ = 0;
+}
+
+std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::publish_available(
+    std::uint64_t observed_end,
+    bool allow_partial) {
+    std::vector<PredictedVisemeCue> result;
+    while (next_segment_ < segments_.size()) {
+        const auto& segment = segments_[next_segment_];
+        const auto segment_end = segment.sample_begin + segment.sample_count;
+        if (observed_end <= segment.sample_begin) {
+            break;
+        }
+        if (observed_end < segment_end) {
+            if (allow_partial) {
+                const auto count = static_cast<std::uint32_t>(observed_end - segment.sample_begin);
+                if (count != 0) {
+                    result.push_back({segment.sample_begin, count, segment.estimate});
+                    published_end_ = observed_end;
+                    ++next_segment_;
+                }
+            }
+            break;
+        }
+        result.push_back({segment.sample_begin, segment.sample_count, segment.estimate});
+        published_end_ = segment_end;
+        ++next_segment_;
+    }
+    return result;
+}
+
+void OnlinePredictiveVisemePlanner::validate_event_utterance(
+    std::uint64_t utterance_id) const {
+    if (utterance_id == 0) {
+        throw std::invalid_argument("online event utterance id must be non-zero");
+    }
+    if (state_ == OnlinePredictiveVisemeState::Idle) {
+        throw std::logic_error("online planner has no active utterance");
+    }
+    if (utterance_id != utterance_id_) {
+        throw std::invalid_argument("online event belongs to a different utterance");
+    }
+}
+
 } // namespace speech_animation
