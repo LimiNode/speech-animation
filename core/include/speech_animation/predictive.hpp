@@ -4,75 +4,73 @@
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace speech_animation {
 
-// Neutral pronunciation evidence supplied by a prepared-text frontend or by
-// an application-owned pronunciation provider. The core does not interpret
-// backend-specific text or stress types.
+/// Pronunciation-independent context supplied by an application/provider.
+struct SpeechContext {
+    std::uint64_t utterance_id = 0;
+    std::uint32_t sample_rate = 0;
+    std::uint64_t total_sample_count = 0;
+    std::string pronunciation_text;
+    // Absolute beginning of the utterance on the canonical PCM clock.
+    std::uint64_t first_sample = 0;
+};
+
+// Neutral pronunciation evidence supplied by a prepared-text frontend or an
+// application-owned pronunciation provider. Backend-specific pronunciation
+// types must be converted before entering the core.
 struct PronunciationUnit {
     std::string symbol;
     float confidence = 1.0F;
     float duration_weight = 1.0F;
 };
 
-// The media context needed to place a complete predicted sequence. The total
-// duration is the known PCM duration, never a wall-clock estimate.
-struct SpeechContext {
-    std::uint64_t utterance_id = 0;
-    std::uint64_t sample_begin = 0;
-    std::uint32_t sample_rate = 0;
-    std::uint64_t total_sample_count = 0;
-};
-
+/// One expected mouth shape with a provider-assigned relative duration.
 struct PredictedVisemeSpec {
-    Viseme value = Viseme::Neutral;
-    float confidence = 0.0F;
+    VisemeEstimate estimate;
     float duration_weight = 1.0F;
 };
 
-struct PredictedVisemeCue {
-    std::uint64_t utterance_id = 0;
-    std::uint64_t sample_begin = 0;
-    std::uint32_t sample_count = 0;
-    std::uint32_t sample_rate = 0;
-    VisemeEstimate viseme{};
-};
-
-// Conservative, backend-independent pronunciation-to-viseme mapping. Unknown
-// symbols intentionally become low-confidence Neutral rather than pretending
-// that amplitude or an unsupported symbol identifies a precise mouth shape.
 class PronunciationVisemeMapper {
 public:
     static PredictedVisemeSpec map(const PronunciationUnit& unit);
-
     static std::vector<PredictedVisemeSpec> map_sequence(
         const std::vector<PronunciationUnit>& pronunciation);
 };
 
 using PronunciationToVisemeAdapter = PronunciationVisemeMapper;
 
-// Places a known pronunciation sequence over a known PCM duration. This is a
-// pure function of its inputs, so callback timing and chunking cannot affect
-// the resulting cue timeline.
+/// A sample-addressed predicted viseme interval.
+struct PredictedVisemeCue {
+    std::uint64_t sample_begin = 0;
+    std::uint32_t sample_count = 0;
+    VisemeEstimate estimate;
+};
+
+/// Allocates a known pronunciation/viseme sequence onto an utterance clock.
+/// This class does not infer phonemes from text.
 class PredictiveVisemePlanner {
 public:
-    PredictiveVisemePlanner() = default;
-    explicit PredictiveVisemePlanner(SpeechContext context)
-        : context_(context), has_context_(true) {}
+    explicit PredictiveVisemePlanner(SpeechContext context);
 
-    std::vector<PredictedVisemeCue> plan(
-        const SpeechContext& context,
-        const std::vector<PredictedVisemeSpec>& specs) const;
+    PredictiveVisemePlanner(const PredictiveVisemePlanner&) = delete;
+    PredictiveVisemePlanner& operator=(const PredictiveVisemePlanner&) = delete;
 
+    /// Build contiguous cues covering the complete context sample range.
     std::vector<PredictedVisemeCue> plan(
-        const std::vector<PredictedVisemeSpec>& specs) const;
+        const std::vector<PredictedVisemeSpec>& sequence) const;
+
+    /// Apply the cue with the greatest overlap to an audio span.
+    SpeechAnimationSpan annotate(
+        const SpeechAnimationSpan& span,
+        const std::vector<PredictedVisemeCue>& cues) const;
+
+    const SpeechContext& context() const noexcept { return context_; }
 
 private:
-    SpeechContext context_{};
-    bool has_context_ = false;
+    SpeechContext context_;
 };
 
 } // namespace speech_animation

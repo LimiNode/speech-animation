@@ -41,6 +41,25 @@ audio-reactive evidence, not a phoneme claim. Predictive pronunciation and
 acoustic-alignment providers can be layered on later without changing the PCM
 clock or importing a backend into core.
 
+## Predictive pronunciation contract
+
+`SpeechContext` and `PredictiveVisemePlanner` provide the first predictive
+viseme seam without pretending to be a phoneme recognizer. An application or
+pronunciation provider supplies an ordered `PredictedVisemeSpec` sequence;
+the planner validates it, allocates positive duration weights over the known
+utterance sample count, and returns contiguous sample-addressed cues. These
+cues are marked `PredictedPronunciation`; PCM remains the causal timing
+evidence and no look-ahead or forced aligner is introduced.
+
+For the first pronunciation vertical slice, an application-owned provider can
+convert neutral `PronunciationUnit` symbols with
+`PronunciationVisemeMapper::map_sequence()` before passing the resulting specs
+to the planner. Unsupported symbols intentionally become low-confidence
+`Neutral` estimates, so a presentation layer can fall back to the
+audio-reactive mouth signal. This mapper is not a TTS, G2P, or forced-aligner
+implementation; backend-specific prepared-text conversion remains outside the
+core.
+
 To run the chunk-sensitivity benchmark:
 
 ```powershell
@@ -58,27 +77,7 @@ anchored at the next sample position; no synthetic PCM is inserted into the
 playback timeline. Call `begin()` when a request may terminate before its first
 PCM chunk; late chunks are rejected.
 
-## Predictive pronunciation v0
-
-The core also contains a deliberately small pronunciation-to-viseme vertical
-slice. An application-owned pronunciation provider supplies neutral
-`PronunciationUnit` values; `PronunciationVisemeMapper` converts them to
-semantic `PredictedVisemeSpec` values, and `PredictiveVisemePlanner` places the
-sequence on a known PCM duration:
-
-```cpp
-#include <speech_animation/predictive.hpp>
-
-const auto specs = speech_animation::PronunciationVisemeMapper::map_sequence(units);
-speech_animation::SpeechContext context{request_id, first_sample, sample_rate,
-                                        total_sample_count};
-const auto cues = speech_animation::PredictiveVisemePlanner{}.plan(context, specs);
-```
-
-Every cue is contiguous and sample-addressed. Its `VisemeEstimate::evidence` is
-always `PredictedPronunciation`; it is never presented as acoustic confirmation.
-Unknown pronunciation symbols become low-confidence `Neutral` cues, allowing a
-presentation layer to fall back to the audio-reactive mouth signal. The planner
-requires the complete PCM duration in this milestone. Online placement while a
-streaming backend has unknown final duration is intentionally a separate API
-milestone and does not add playback delay here.
+`PlaybackLockedCueSelector` consumes those sample-addressed receipts using a
+sink-provided `PlaybackCursorSnapshot`. It scopes every selection by playback
+epoch and request ID, treats unavailable or stale cursors as neutral, and
+exposes terminal-fade progress without adding samples to the audio timeline.

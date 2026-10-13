@@ -1,12 +1,12 @@
 #include "speech_animation/predictive.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <cctype>
+#include <cmath>
 #include <initializer_list>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
+#include <utility>
 
 namespace speech_animation {
 namespace {
@@ -31,40 +31,59 @@ bool is_any(const std::string& symbol, std::initializer_list<const char*> values
     });
 }
 
+void validate_estimate(const VisemeEstimate& estimate) {
+    if (!std::isfinite(estimate.confidence) ||
+        estimate.confidence < 0.0F || estimate.confidence > 1.0F) {
+        throw std::invalid_argument("predicted viseme confidence must be in [0, 1]");
+    }
+    if (estimate.evidence != AnimationEvidence::PredictedPronunciation) {
+        throw std::invalid_argument(
+            "predictive viseme cues require PredictedPronunciation evidence");
+    }
+}
+
+std::uint64_t end_sample(std::uint64_t begin, std::uint32_t count) {
+    if (count == 0 || begin > std::numeric_limits<std::uint64_t>::max() - count) {
+        throw std::invalid_argument("predicted viseme cue has an invalid sample range");
+    }
+    return begin + count;
+}
+
 } // namespace
 
 PredictedVisemeSpec PronunciationVisemeMapper::map(const PronunciationUnit& unit) {
     const auto symbol = ascii_lower(unit.symbol);
     PredictedVisemeSpec result;
-    result.confidence = clamp01(unit.confidence);
+    result.estimate.confidence = clamp01(unit.confidence);
+    result.estimate.evidence = AnimationEvidence::PredictedPronunciation;
     result.duration_weight = std::isfinite(unit.duration_weight) && unit.duration_weight > 0.0F
         ? unit.duration_weight
         : 1.0F;
 
+    // Providers may use ASCII phoneme names (for example ARPAbet-like vowel
+    // labels) or UTF-8 symbols. UTF-8 symbols are kept in the provider layer;
+    // the conservative ASCII aliases below are sufficient for the generic
+    // core and avoid locale-dependent case conversion.
     if (symbol.empty() || is_any(symbol, {"sil", "sp", "pau", "pause", "<sil>"})) {
-        result.value = Viseme::Closed;
-        // Silence markers are useful for timing but are not a confident
-        // pronunciation claim.
-        result.confidence *= 0.75F;
-        return result;
-    }
-    if (is_any(symbol, {"p", "b", "m", "pcl", "bcl", "mcl"})) {
-        result.value = Viseme::Closed;
+        result.estimate.value = Viseme::Closed;
+        result.estimate.confidence *= 0.75F;
+    } else if (is_any(symbol, {"p", "b", "m", "pcl", "bcl", "mcl"})) {
+        result.estimate.value = Viseme::Closed;
     } else if (is_any(symbol, {"f", "v", "fcl", "vcl"})) {
-        result.value = Viseme::FV;
-    } else if (is_any(symbol, {"a", "aa", "ah", "ɑ", "ɐ", "а", "я"})) {
-        result.value = Viseme::A;
-    } else if (is_any(symbol, {"e", "ee", "eh", "ɛ", "eɪ", "э", "е", "ё"})) {
-        result.value = Viseme::E;
-    } else if (is_any(symbol, {"i", "ih", "iy", "ɪ", "iː", "и", "й"})) {
-        result.value = Viseme::I;
-    } else if (is_any(symbol, {"o", "ao", "ow", "ɔ", "о", "ё"})) {
-        result.value = Viseme::O;
-    } else if (is_any(symbol, {"u", "uh", "uw", "ʊ", "uː", "у", "ю"})) {
-        result.value = Viseme::U;
+        result.estimate.value = Viseme::FV;
+    } else if (is_any(symbol, {"a", "aa", "ah"})) {
+        result.estimate.value = Viseme::A;
+    } else if (is_any(symbol, {"e", "ee", "eh", "ey"})) {
+        result.estimate.value = Viseme::E;
+    } else if (is_any(symbol, {"i", "ih", "iy"})) {
+        result.estimate.value = Viseme::I;
+    } else if (is_any(symbol, {"o", "ao", "ow"})) {
+        result.estimate.value = Viseme::O;
+    } else if (is_any(symbol, {"u", "uh", "uw"})) {
+        result.estimate.value = Viseme::U;
     } else {
-        result.value = Viseme::Neutral;
-        result.confidence *= 0.35F;
+        result.estimate.value = Viseme::Neutral;
+        result.estimate.confidence *= 0.35F;
     }
     return result;
 }
@@ -79,82 +98,98 @@ std::vector<PredictedVisemeSpec> PronunciationVisemeMapper::map_sequence(
     return result;
 }
 
+PredictiveVisemePlanner::PredictiveVisemePlanner(SpeechContext context)
+    : context_(std::move(context)) {
+    if (context_.sample_rate == 0 || context_.total_sample_count == 0 ||
+        context_.total_sample_count > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::invalid_argument(
+            "speech context requires a sample rate and uint32 sample count");
+    }
+    if (context_.utterance_id == 0) {
+        throw std::invalid_argument("speech context requires a non-zero utterance id");
+    }
+    if (context_.first_sample > std::numeric_limits<std::uint64_t>::max() -
+                                  context_.total_sample_count) {
+        throw std::invalid_argument("speech context sample range overflows");
+    }
+}
+
 std::vector<PredictedVisemeCue> PredictiveVisemePlanner::plan(
-    const SpeechContext& context,
-    const std::vector<PredictedVisemeSpec>& specs) const {
-    if (context.utterance_id == 0 || context.sample_rate == 0 || context.total_sample_count == 0) {
-        throw std::invalid_argument("SpeechContext must contain utterance, rate, and duration");
-    }
-    if (context.total_sample_count > std::numeric_limits<std::uint32_t>::max()) {
-        throw std::invalid_argument("SpeechContext duration exceeds cue sample_count range");
-    }
-    if (context.sample_begin > std::numeric_limits<std::uint64_t>::max() -
-                                  context.total_sample_count) {
-        throw std::invalid_argument("SpeechContext sample range overflows");
-    }
-    if (specs.empty()) {
-        return {};
-    }
-    if (specs.size() > context.total_sample_count) {
-        throw std::invalid_argument("more pronunciation units than PCM samples");
+    const std::vector<PredictedVisemeSpec>& sequence) const {
+    if (sequence.empty() || sequence.size() > context_.total_sample_count) {
+        throw std::invalid_argument("invalid predictive viseme sequence length");
     }
 
-    std::vector<long double> weights;
-    weights.reserve(specs.size());
-    long double total_weight = 0.0L;
-    for (const auto& spec : specs) {
-        const long double weight = std::isfinite(spec.duration_weight) && spec.duration_weight > 0.0F
-            ? static_cast<long double>(spec.duration_weight)
-            : 1.0L;
-        weights.push_back(weight);
-        total_weight += weight;
+    double total_weight = 0.0;
+    for (const auto& spec : sequence) {
+        validate_estimate(spec.estimate);
+        if (!std::isfinite(spec.duration_weight) || spec.duration_weight <= 0.0F) {
+            throw std::invalid_argument("predictive viseme duration weight must be positive");
+        }
+        total_weight += static_cast<double>(spec.duration_weight);
     }
 
-    const auto total = static_cast<std::uint32_t>(context.total_sample_count);
-    const auto count = specs.size();
-    std::vector<std::uint32_t> durations(count, 1U);
-    std::uint32_t remaining = total - static_cast<std::uint32_t>(count);
-    std::vector<long double> fractions(count, 0.0L);
-    std::uint32_t allocated = 0;
-    for (std::size_t i = 0; i < count; ++i) {
-        const long double exact = static_cast<long double>(remaining) * weights[i] / total_weight;
-        const auto whole = static_cast<std::uint32_t>(std::floor(exact));
-        durations[i] += whole;
-        allocated += whole;
-        fractions[i] = exact - static_cast<long double>(whole);
+    const auto sample_count = context_.total_sample_count;
+    std::vector<std::uint32_t> counts(sequence.size(), 1);
+    const auto remaining = sample_count - sequence.size();
+    std::uint64_t assigned = 0;
+    std::vector<double> fractions(sequence.size(), 0.0);
+    for (std::size_t index = 0; index < sequence.size(); ++index) {
+        const double exact = static_cast<double>(remaining) *
+            static_cast<double>(sequence[index].duration_weight) / total_weight;
+        const auto whole = static_cast<std::uint64_t>(std::floor(exact));
+        counts[index] += static_cast<std::uint32_t>(whole);
+        assigned += whole;
+        fractions[index] = exact - static_cast<double>(whole);
     }
-    while (allocated < remaining) {
-        const auto best = static_cast<std::size_t>(std::distance(
-            fractions.begin(), std::max_element(fractions.begin(), fractions.end())));
-        ++durations[best];
-        fractions[best] = -1.0L;
-        ++allocated;
+    auto leftovers = remaining - assigned;
+    std::vector<std::size_t> order(sequence.size());
+    for (std::size_t index = 0; index < order.size(); ++index) {
+        order[index] = index;
+    }
+    std::stable_sort(order.begin(), order.end(), [&fractions](std::size_t left, std::size_t right) {
+        return fractions[left] > fractions[right];
+    });
+    for (std::size_t index = 0; leftovers != 0; ++index, --leftovers) {
+        ++counts[order[index % order.size()]];
     }
 
     std::vector<PredictedVisemeCue> result;
-    result.reserve(count);
-    std::uint64_t position = context.sample_begin;
-    for (std::size_t i = 0; i < count; ++i) {
-        PredictedVisemeCue cue;
-        cue.utterance_id = context.utterance_id;
-        cue.sample_begin = position;
-        cue.sample_count = durations[i];
-        cue.sample_rate = context.sample_rate;
-        cue.viseme.value = specs[i].value;
-        cue.viseme.confidence = clamp01(specs[i].confidence);
-        cue.viseme.evidence = AnimationEvidence::PredictedPronunciation;
-        result.push_back(cue);
-        position += durations[i];
+    result.reserve(sequence.size());
+    std::uint64_t sample_begin = context_.first_sample;
+    for (std::size_t index = 0; index < sequence.size(); ++index) {
+        result.push_back({sample_begin, counts[index], sequence[index].estimate});
+        sample_begin += counts[index];
     }
     return result;
 }
 
-std::vector<PredictedVisemeCue> PredictiveVisemePlanner::plan(
-    const std::vector<PredictedVisemeSpec>& specs) const {
-    if (!has_context_) {
-        throw std::logic_error("PredictiveVisemePlanner has no SpeechContext");
+SpeechAnimationSpan PredictiveVisemePlanner::annotate(
+    const SpeechAnimationSpan& span,
+    const std::vector<PredictedVisemeCue>& cues) const {
+    if (span.utterance_id != context_.utterance_id ||
+        span.sample_rate != context_.sample_rate || span.sample_count == 0) {
+        throw std::invalid_argument("speech span does not match predictive context");
     }
-    return plan(context_, specs);
+    const auto span_end = end_sample(span.sample_begin, span.sample_count);
+    SpeechAnimationSpan result = span;
+    result.viseme.reset();
+    std::uint64_t best_overlap = 0;
+    const auto context_end = context_.first_sample + context_.total_sample_count;
+    for (const auto& cue : cues) {
+        const auto cue_end = end_sample(cue.sample_begin, cue.sample_count);
+        validate_estimate(cue.estimate);
+        if (cue.sample_begin < context_.first_sample || cue_end > context_end) {
+            throw std::invalid_argument("predicted viseme cue exceeds speech context");
+        }
+        const auto overlap_begin = std::max(span.sample_begin, cue.sample_begin);
+        const auto overlap_end = std::min(span_end, cue_end);
+        if (overlap_end > overlap_begin && overlap_end - overlap_begin > best_overlap) {
+            best_overlap = overlap_end - overlap_begin;
+            result.viseme = cue.estimate;
+        }
+    }
+    return result;
 }
 
 } // namespace speech_animation

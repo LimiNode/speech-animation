@@ -1,17 +1,15 @@
-#include <speech_animation/predictive.hpp>
+#include <speech_animation/speech_animation.hpp>
 
-#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 using namespace speech_animation;
 
 static void check(bool condition, const char* expression, int line) {
     if (!condition) {
-        throw std::runtime_error("predictive test line " + std::to_string(line) +
-                                 ": CHECK failed: " + expression);
+        throw std::runtime_error("CHECK failed at line " + std::to_string(line) +
+                                 ": " + expression);
     }
 }
 
@@ -19,64 +17,64 @@ static void check(bool condition, const char* expression, int line) {
 
 int main() {
     try {
-        const std::vector<PronunciationUnit> pronunciation = {
-            {"p", 1.0F, 1.0F},
-            {"a", 0.9F, 2.0F},
-            {"f", 0.8F, 1.0F},
-            {"unknown", 1.0F, 1.0F},
-        };
-        const auto specs = PronunciationVisemeMapper::map_sequence(pronunciation);
-        CHECK(specs.size() == 4);
-        CHECK(specs[0].value == Viseme::Closed);
-        CHECK(specs[1].value == Viseme::A);
-        CHECK(specs[2].value == Viseme::FV);
-        CHECK(specs[3].value == Viseme::Neutral);
-        CHECK(specs[3].confidence < 1.0F);
+        const auto mapped = PronunciationVisemeMapper::map_sequence({
+            {"p", 1.0F, 1.0F}, {"a", 0.9F, 2.0F}, {"f", 0.8F, 1.0F},
+            {"unsupported", 1.0F, 1.0F},
+        });
+        CHECK(mapped.size() == 4);
+        CHECK(mapped[0].estimate.value == Viseme::Closed);
+        CHECK(mapped[1].estimate.value == Viseme::A);
+        CHECK(mapped[2].estimate.value == Viseme::FV);
+        CHECK(mapped[3].estimate.value == Viseme::Neutral);
+        CHECK(mapped[3].estimate.confidence < 1.0F);
+        CHECK(mapped[1].estimate.evidence == AnimationEvidence::PredictedPronunciation);
 
-        const SpeechContext context{77, 1000, 48000, 1000};
-        PredictiveVisemePlanner planner;
-        const auto cues = planner.plan(context, specs);
-        CHECK(cues.size() == specs.size());
-        CHECK(cues.front().sample_begin == 1000);
-        CHECK(cues.front().sample_count == 200);
-        CHECK(cues[1].sample_count == 400);
-        CHECK(cues[2].sample_count == 200);
-        CHECK(cues.back().sample_count == 200);
-        std::uint64_t next = context.sample_begin;
-        for (const auto& cue : cues) {
-            CHECK(cue.utterance_id == context.utterance_id);
-            CHECK(cue.sample_rate == context.sample_rate);
-            CHECK(cue.sample_begin == next);
-            CHECK(cue.sample_count != 0);
-            CHECK(cue.viseme.evidence == AnimationEvidence::PredictedPronunciation);
-            CHECK(std::isfinite(cue.viseme.confidence));
-            next += cue.sample_count;
-        }
-        CHECK(next == context.sample_begin + context.total_sample_count);
+        PredictiveVisemePlanner mapped_planner(SpeechContext{41, 48000, 800, "mafa"});
+        const auto mapped_cues = mapped_planner.plan(mapped);
+        CHECK(mapped_cues.size() == mapped.size());
+        CHECK(mapped_cues.front().sample_begin == 0);
+        CHECK(mapped_cues.back().sample_begin + mapped_cues.back().sample_count == 800);
 
-        PredictiveVisemePlanner bound_planner(context);
-        const auto bound_cues = bound_planner.plan(specs);
-        CHECK(bound_cues.size() == cues.size());
-        for (std::size_t i = 0; i < cues.size(); ++i) {
-            CHECK(bound_cues[i].sample_begin == cues[i].sample_begin);
-            CHECK(bound_cues[i].sample_count == cues[i].sample_count);
-        }
+        SpeechContext context{42, 48000, 1000, "ma-ka"};
+        PredictiveVisemePlanner planner(context);
+        const auto cues = planner.plan({
+            {{Viseme::A, 0.9F, AnimationEvidence::PredictedPronunciation}, 1.0F},
+            {{Viseme::Closed, 0.8F, AnimationEvidence::PredictedPronunciation}, 1.0F},
+            {{Viseme::A, 0.7F, AnimationEvidence::PredictedPronunciation}, 2.0F},
+        });
+        CHECK(cues.size() == 3);
+        CHECK(cues[0].sample_begin == 0 && cues[0].sample_count == 250);
+        CHECK(cues[1].sample_begin == 250 && cues[1].sample_count == 250);
+        CHECK(cues[2].sample_begin == 500 && cues[2].sample_count == 500);
+        CHECK(cues[2].sample_begin + cues[2].sample_count == context.total_sample_count);
 
-        bool invalid_context = false;
+        SpeechContext offset_context{43, 48000, 1000, "ma-ka", 2000};
+        PredictiveVisemePlanner offset_planner(offset_context);
+        const auto offset_cues = offset_planner.plan({
+            {{Viseme::A, 1.0F, AnimationEvidence::PredictedPronunciation}, 1.0F},
+        });
+        CHECK(offset_cues.front().sample_begin == 2000);
+
+        SpeechAnimationSpan span{42, 600, 100, 48000, 0.0F, 0.0F, std::nullopt,
+                                 SpeechActivity::Active};
+        const auto annotated = planner.annotate(span, cues);
+        CHECK(annotated.viseme.has_value());
+        CHECK(annotated.viseme->value == Viseme::A);
+        CHECK(annotated.viseme->evidence == AnimationEvidence::PredictedPronunciation);
+
+        SpeechAnimationSpan outside = span;
+        outside.sample_begin = 1000;
+        outside.viseme = VisemeEstimate{
+            Viseme::Closed, 1.0F, AnimationEvidence::AudioReactive};
+        CHECK(!planner.annotate(outside, cues).viseme.has_value());
+
+        bool rejected_audio_evidence = false;
         try {
-            (void)planner.plan(SpeechContext{0, 0, 48000, 100}, specs);
+            (void)planner.plan({{{Viseme::A, 1.0F, AnimationEvidence::AudioReactive}, 1.0F}});
         } catch (const std::invalid_argument&) {
-            invalid_context = true;
+            rejected_audio_evidence = true;
         }
-        CHECK(invalid_context);
-
-        bool no_bound_context = false;
-        try {
-            (void)planner.plan(specs);
-        } catch (const std::logic_error&) {
-            no_bound_context = true;
-        }
-        CHECK(no_bound_context);
+        CHECK(rejected_audio_evidence);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
