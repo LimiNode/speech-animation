@@ -52,6 +52,10 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
     target_link_libraries(speech_animation_predictive_tests PRIVATE speech_animation::speech_animation)
     add_test(NAME speech_animation_predictive_tests COMMAND speech_animation_predictive_tests)
 
+    add_executable(speech_animation_online_predictive_tests tests/online_predictive_tests.cpp)
+    target_link_libraries(speech_animation_online_predictive_tests PRIVATE speech_animation::speech_animation)
+    add_test(NAME speech_animation_online_predictive_tests COMMAND speech_animation_online_predictive_tests)
+
     add_executable(speech_animation_integration_tests tests/integration_tests.cpp)
     target_link_libraries(speech_animation_integration_tests PRIVATE
         speech_animation::integration Threads::Threads)

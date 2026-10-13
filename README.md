@@ -85,3 +85,27 @@ PCM chunk; late chunks are rejected.
 sink-provided `PlaybackCursorSnapshot`. It scopes every selection by playback
 epoch and request ID, treats unavailable or stale cursors as neutral, and
 exposes terminal-fade progress without adding samples to the audio timeline.
+
+## Online predictive placement
+
+`OnlinePredictiveVisemePlanner` is the streaming counterpart to
+`PredictiveVisemePlanner`. It accepts an ordered `PredictedVisemeSpec` sequence
+without a final utterance duration and observes only canonical PCM sample
+ranges:
+
+```cpp
+speech_animation::OnlinePredictiveVisemePolicy policy{120};
+speech_animation::OnlinePredictiveVisemePlanner planner(policy);
+planner.begin(request_id, sample_rate, first_sample, sequence);
+auto cues = planner.observe_samples(first_sample, sample_count);
+auto tail = planner.complete();
+```
+
+The timing hint is explicit `samples_per_weight`; a zero hint is rejected
+rather than silently inventing a duration. A cue is published only after its
+full nominal interval is observed. `complete()` may publish one clipped cue
+for the currently observed partial interval, never beyond observed PCM. Once
+published, a cue is immutable; later sample chunks cannot retime or replace
+it. Samples beyond the pronunciation sequence remain uncovered so a consumer
+can use the audio-reactive fallback. Cancellation publishes no further cues,
+and `reset()` is required before another utterance.
