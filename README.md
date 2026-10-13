@@ -108,4 +108,7 @@ for the currently observed partial interval, never beyond observed PCM. Once
 published, a cue is immutable; later sample chunks cannot retime or replace
 it. Samples beyond the pronunciation sequence remain uncovered so a consumer
 can use the audio-reactive fallback. Cancellation publishes no further cues,
-and `reset()` is required before another utterance.
+and `reset()` is required before another utterance. `reset()` is an
+owner-controlled lifecycle operation; delayed audio callbacks must not call it
+on behalf of an older generation and must use the matching `utterance_id`
+when submitting events instead.

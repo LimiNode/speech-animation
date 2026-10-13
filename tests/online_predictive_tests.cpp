@@ -101,6 +101,17 @@ int main() {
             {1480, 240, {Viseme::O, 0.6F, AnimationEvidence::PredictedPronunciation}},
         });
 
+        // The same PCM range must produce the same cues when delivered as a
+        // single chunk, not only when compared with expected values.
+        OnlinePredictiveVisemePlanner single_chunk(policy);
+        single_chunk.begin(30, 48000, 1000, sequence());
+        auto single_chunk_cues = single_chunk.observe_samples(30, 1000, 1000);
+        auto single_chunk_tail = single_chunk.complete(30);
+        single_chunk_cues.insert(single_chunk_cues.end(),
+                                 single_chunk_tail.begin(),
+                                 single_chunk_tail.end());
+        check_same_cues(single_chunk_cues, partitioned_cues);
+
         // Pronunciation shorter than PCM leaves the rest uncovered for the
         // audio-reactive fallback; no invented prediction is emitted.
         OnlinePredictiveVisemePlanner short_pronunciation(policy);

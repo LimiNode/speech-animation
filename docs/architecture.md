@@ -89,7 +89,9 @@ than PCM buffers and never reads callback arrival time. Every mutating event
 also carries the `utterance_id` supplied to `begin()`, so delayed callbacks
 from an older generation are rejected even when their sample offsets happen
 to match a new utterance. Request/epoch ownership remains the integration
-layer's responsibility; this ID fence is the core's local guard. Adapters must
+layer's responsibility; this ID fence is the core's local guard. `reset()` is
+owner-controlled lifecycle state rather than an event accepted from an audio
+callback, so delayed callbacks must never reset the planner. Adapters must
 provide a unique ID for each generation and must not recycle an old ID while
 callbacks from that generation can still be in flight.
 

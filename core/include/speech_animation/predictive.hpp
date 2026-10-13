@@ -98,7 +98,9 @@ public:
     // Repeated cancellation is idempotent.
     void cancel(std::uint64_t utterance_id);
 
-    // Returns to Idle and clears all utterance state.
+    // Returns to Idle and clears all utterance state. This is an owner-controlled
+    // lifecycle operation, not an event accepted from an audio callback; delayed
+    // callbacks must use their utterance_id with the event methods instead.
     void reset() noexcept;
 
     OnlinePredictiveVisemeState state() const noexcept { return state_; }
