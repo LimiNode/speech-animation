@@ -276,8 +276,10 @@ void OnlinePredictiveVisemePlanner::begin(
 }
 
 std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::observe_samples(
+    std::uint64_t utterance_id,
     std::uint64_t first_sample,
     std::uint32_t sample_count) {
+    validate_event_utterance(utterance_id);
     if (state_ != OnlinePredictiveVisemeState::Active) {
         throw std::logic_error("online planner is not active");
     }
@@ -289,7 +291,9 @@ std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::observe_samples(
     return publish_available(observed_end_, false);
 }
 
-std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::complete() {
+std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::complete(
+    std::uint64_t utterance_id) {
+    validate_event_utterance(utterance_id);
     if (state_ == OnlinePredictiveVisemeState::Idle) {
         throw std::logic_error("online planner has no active utterance");
     }
@@ -301,7 +305,8 @@ std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::complete() {
     return result;
 }
 
-void OnlinePredictiveVisemePlanner::cancel() {
+void OnlinePredictiveVisemePlanner::cancel(std::uint64_t utterance_id) {
+    validate_event_utterance(utterance_id);
     if (state_ == OnlinePredictiveVisemeState::Idle) {
         throw std::logic_error("online planner has no active utterance");
     }
@@ -349,6 +354,19 @@ std::vector<PredictedVisemeCue> OnlinePredictiveVisemePlanner::publish_available
         ++next_segment_;
     }
     return result;
+}
+
+void OnlinePredictiveVisemePlanner::validate_event_utterance(
+    std::uint64_t utterance_id) const {
+    if (utterance_id == 0) {
+        throw std::invalid_argument("online event utterance id must be non-zero");
+    }
+    if (state_ == OnlinePredictiveVisemeState::Idle) {
+        throw std::logic_error("online planner has no active utterance");
+    }
+    if (utterance_id != utterance_id_) {
+        throw std::invalid_argument("online event belongs to a different utterance");
+    }
 }
 
 } // namespace speech_animation

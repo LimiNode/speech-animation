@@ -85,7 +85,13 @@ prediction is available.
 changing the full-duration planner or playback selector. It is a stateful,
 consumer-side component with `begin()`, `observe_samples()`, `complete()`,
 `cancel()`, and `reset()` lifecycle methods. It receives sample ranges rather
-than PCM buffers and never reads callback arrival time.
+than PCM buffers and never reads callback arrival time. Every mutating event
+also carries the `utterance_id` supplied to `begin()`, so delayed callbacks
+from an older generation are rejected even when their sample offsets happen
+to match a new utterance. Request/epoch ownership remains the integration
+layer's responsibility; this ID fence is the core's local guard. Adapters must
+provide a unique ID for each generation and must not recycle an old ID while
+callbacks from that generation can still be in flight.
 
 The caller supplies an explicit `samples_per_weight` hint. This is a nominal
 provisional timing policy, not an acoustic duration claim; a zero hint is

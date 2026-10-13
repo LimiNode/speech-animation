@@ -75,7 +75,8 @@ public:
     OnlinePredictiveVisemePlanner(const OnlinePredictiveVisemePlanner&) = delete;
     OnlinePredictiveVisemePlanner& operator=(const OnlinePredictiveVisemePlanner&) = delete;
 
-    // Starts a new utterance. The sequence is validated before state changes.
+    // Starts a new utterance. utterance_id must be unique for the generation;
+    // the sequence is validated before state changes.
     void begin(std::uint64_t utterance_id,
                std::uint32_t sample_rate,
                std::uint64_t first_sample,
@@ -85,16 +86,17 @@ public:
     // fully observed prediction intervals. A partial current interval is held
     // until complete(), so previously published ranges never move.
     std::vector<PredictedVisemeCue> observe_samples(
+        std::uint64_t utterance_id,
         std::uint64_t first_sample,
         std::uint32_t sample_count);
 
     // Publishes a final clipped interval only when it intersects observed PCM.
     // Repeated completion is idempotent.
-    std::vector<PredictedVisemeCue> complete();
+    std::vector<PredictedVisemeCue> complete(std::uint64_t utterance_id);
 
     // Stops publication without fabricating PCM or prediction intervals.
     // Repeated cancellation is idempotent.
-    void cancel();
+    void cancel(std::uint64_t utterance_id);
 
     // Returns to Idle and clears all utterance state.
     void reset() noexcept;
@@ -114,6 +116,7 @@ private:
     std::vector<PredictedVisemeCue> publish_available(
         std::uint64_t observed_end,
         bool allow_partial);
+    void validate_event_utterance(std::uint64_t utterance_id) const;
 
     OnlinePredictiveVisemePolicy policy_;
     OnlinePredictiveVisemeState state_ = OnlinePredictiveVisemeState::Idle;

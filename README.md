@@ -97,8 +97,8 @@ ranges:
 speech_animation::OnlinePredictiveVisemePolicy policy{120};
 speech_animation::OnlinePredictiveVisemePlanner planner(policy);
 planner.begin(request_id, sample_rate, first_sample, sequence);
-auto cues = planner.observe_samples(first_sample, sample_count);
-auto tail = planner.complete();
+auto cues = planner.observe_samples(request_id, first_sample, sample_count);
+auto tail = planner.complete(request_id);
 ```
 
 The timing hint is explicit `samples_per_weight`; a zero hint is rejected
