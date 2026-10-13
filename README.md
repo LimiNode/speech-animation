@@ -57,3 +57,28 @@ the returned `SpeechAnimationReceipt` values with `to_json()`. `complete()` and
 anchored at the next sample position; no synthetic PCM is inserted into the
 playback timeline. Call `begin()` when a request may terminate before its first
 PCM chunk; late chunks are rejected.
+
+## Predictive pronunciation v0
+
+The core also contains a deliberately small pronunciation-to-viseme vertical
+slice. An application-owned pronunciation provider supplies neutral
+`PronunciationUnit` values; `PronunciationVisemeMapper` converts them to
+semantic `PredictedVisemeSpec` values, and `PredictiveVisemePlanner` places the
+sequence on a known PCM duration:
+
+```cpp
+#include <speech_animation/predictive.hpp>
+
+const auto specs = speech_animation::PronunciationVisemeMapper::map_sequence(units);
+speech_animation::SpeechContext context{request_id, first_sample, sample_rate,
+                                        total_sample_count};
+const auto cues = speech_animation::PredictiveVisemePlanner{}.plan(context, specs);
+```
+
+Every cue is contiguous and sample-addressed. Its `VisemeEstimate::evidence` is
+always `PredictedPronunciation`; it is never presented as acoustic confirmation.
+Unknown pronunciation symbols become low-confidence `Neutral` cues, allowing a
+presentation layer to fall back to the audio-reactive mouth signal. The planner
+requires the complete PCM duration in this milestone. Online placement while a
+streaming backend has unknown final duration is intentionally a separate API
+milestone and does not add playback delay here.

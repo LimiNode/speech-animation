@@ -47,3 +47,25 @@ outside the core target so a TTS bridge can depend on it without making the
 analyzer depend on that bridge. Completion and cancellation append a synthetic
 fade receipt at the next sample position and mark exactly one terminal receipt;
 no synthetic PCM is inserted into the playback timeline.
+
+## Predictive pronunciation boundary
+
+`core/include/speech_animation/predictive.hpp` defines the backend-neutral
+boundary for the next milestone. A pronunciation provider emits
+`PronunciationUnit` symbols and confidence; `PronunciationVisemeMapper` maps
+those symbols to the small semantic `Viseme` taxonomy. The mapper is
+conservative: unsupported symbols become low-confidence `Neutral`, and no
+audio amplitude is treated as phoneme evidence.
+
+`PredictiveVisemePlanner` then consumes the resulting
+`PredictedVisemeSpec` sequence together with a `SpeechContext` containing the
+known PCM duration. It emits contiguous `PredictedVisemeCue` records on the
+canonical sample clock, with `PredictedPronunciation` evidence. The output is
+deterministic for a given pronunciation sequence and duration, independent of
+callback timing or input chunking.
+
+This is intentionally a full-duration vertical slice. Streaming placement
+with an unknown final duration, PCM-driven correction, and acoustic alignment
+remain later stages. A presentation consumer must treat these cues as
+tentative and fall back to the audio-reactive signal when no reliable
+prediction is available.
