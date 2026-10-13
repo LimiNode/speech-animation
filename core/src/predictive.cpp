@@ -71,15 +71,15 @@ PredictedVisemeSpec PronunciationVisemeMapper::map(const PronunciationUnit& unit
         result.estimate.value = Viseme::Closed;
     } else if (is_any(symbol, {"f", "v", "fcl", "vcl"})) {
         result.estimate.value = Viseme::FV;
-    } else if (is_any(symbol, {"a", "aa", "ah"})) {
+    } else if (is_any(symbol, {"a", "aa", "ah", "\xD0\xB0", "\xD1\x8F"})) {
         result.estimate.value = Viseme::A;
-    } else if (is_any(symbol, {"e", "ee", "eh", "ey"})) {
+    } else if (is_any(symbol, {"e", "ee", "eh", "ey", "\xD1\x8D", "\xD0\xB5", "\xD1\x91"})) {
         result.estimate.value = Viseme::E;
-    } else if (is_any(symbol, {"i", "ih", "iy"})) {
+    } else if (is_any(symbol, {"i", "ih", "iy", "\xD0\xB8", "\xD0\xB9"})) {
         result.estimate.value = Viseme::I;
-    } else if (is_any(symbol, {"o", "ao", "ow"})) {
+    } else if (is_any(symbol, {"o", "ao", "ow", "\xD0\xBE"})) {
         result.estimate.value = Viseme::O;
-    } else if (is_any(symbol, {"u", "uh", "uw"})) {
+    } else if (is_any(symbol, {"u", "uh", "uw", "\xD1\x83", "\xD1\x8E"})) {
         result.estimate.value = Viseme::U;
     } else {
         result.estimate.value = Viseme::Neutral;

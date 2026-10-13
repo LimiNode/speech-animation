@@ -28,6 +28,8 @@ int main() {
         CHECK(mapped[3].estimate.value == Viseme::Neutral);
         CHECK(mapped[3].estimate.confidence < 1.0F);
         CHECK(mapped[1].estimate.evidence == AnimationEvidence::PredictedPronunciation);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD0\xB0", 1.0F, 1.0F}).estimate.value == Viseme::A);
+        CHECK(PronunciationVisemeMapper::map(PronunciationUnit{"\xD0\xBE", 1.0F, 1.0F}).estimate.value == Viseme::O);
 
         PredictiveVisemePlanner mapped_planner(SpeechContext{41, 48000, 800, "mafa"});
         const auto mapped_cues = mapped_planner.plan(mapped);
