@@ -5,7 +5,7 @@ find_package(Threads REQUIRED)
 
 option(SPEECH_ANIMATION_BUILD_TESTS "Build speech-animation tests" ON)
 option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF)
-option(SPEECH_ANIMATION_BUILD_RESEARCH "Build experimental audio-reactive research target" ON)
+option(SPEECH_ANIMATION_BUILD_RESEARCH "Build experimental audio-reactive research target" OFF)
 
 add_library(speech_animation
     core/src/analyzer.cpp

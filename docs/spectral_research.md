@@ -25,11 +25,14 @@ Neither B nor C recognizes a phoneme. A present estimate always carries
 `maximum_confidence` (0.60 by default). Silence, weak energy, and low spectral
 contrast leave `viseme` empty while retaining the generic energy/activity data.
 
-The analyzer is causal: a cue is emitted only after its trailing analysis
-window consists of observed samples. It stores at most one configured window,
-rejects gaps/overlaps, ignores callback arrival time, and emits absolute
-sample-addressed ranges. `flush()` emits an observed tail using the latest
-available frame; it never invents future PCM.
+The analyzer is causal: a cue is emitted only after its own output range is
+observed, and its analysis frame ends exactly at that range's end. During
+warm-up the frame is shorter than the configured window; it grows until the
+ring is full. It stores at most one configured window, rejects gaps/overlaps,
+ignores callback arrival time, and emits absolute sample-addressed ranges.
+`flush()` emits an observed tail using the latest available frame; it never
+invents future PCM. Window and hop sizes are independently bounded and a cue
+never extends beyond the observed frontier.
 
 ## Reproducible experiment
 
@@ -45,21 +48,29 @@ build/speech_animation_spectral_benchmark
 ```
 
 The benchmark uses five seconds of deterministic 48 kHz synthetic voiced
-segments (440, 600, 800, 1200, and 2500 Hz), compares 80/480/1920-sample input
-chunks, and reports runtime, confident cues, viseme switches, and mean weight
-delta. One local Release run produced:
+segments (440, 600, 800, 1200, and 2500 Hz) plus a separate amplitude fixture
+with silence, quiet speech, ramps, loud speech, and pulses. It compares
+80/480/1920-sample input chunks and reports runtime, confident cues, viseme
+switches, and mean weight delta. One local Release run for the voiced fixture
+produced:
 
 | Variant | Chunk | ms / 5 s | Realtime factor | Cues | Confident | Switches | Mean Δweights |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| A baseline | 80 | 8.930 | 560x | 500 | 0 | 0 | 0.000 |
-| B amplitude | 80 | 4.708 | 1062x | 499 | 499 | 0 | 0.000 |
-| C spectral | 80 | 26.529 | 188x | 499 | 281 | 11 | 0.048 |
-| A baseline | 480 | 8.947 | 559x | 500 | 0 | 0 | 0.000 |
-| B amplitude | 480 | 4.116 | 1215x | 499 | 499 | 0 | 0.000 |
-| C spectral | 480 | 26.628 | 188x | 499 | 281 | 11 | 0.048 |
-| A baseline | 1920 | 8.533 | 586x | 500 | 0 | 0 | 0.000 |
-| B amplitude | 1920 | 5.297 | 944x | 499 | 499 | 0 | 0.000 |
-| C spectral | 1920 | 27.441 | 182x | 499 | 281 | 11 | 0.048 |
+| A baseline | 80 | 8.773 | 570x | 500 | 0 | 0 | 0.000 |
+| B amplitude | 80 | 4.117 | 1214x | 500 | 500 | 0 | 0.000 |
+| C spectral | 80 | 27.004 | 185x | 500 | 280 | 11 | 0.048 |
+| A baseline | 480 | 8.600 | 581x | 500 | 0 | 0 | 0.000 |
+| B amplitude | 480 | 4.305 | 1161x | 500 | 500 | 0 | 0.000 |
+| C spectral | 480 | 26.294 | 190x | 500 | 280 | 11 | 0.048 |
+| A baseline | 1920 | 8.915 | 561x | 500 | 0 | 0 | 0.000 |
+| B amplitude | 1920 | 4.152 | 1204x | 500 | 500 | 0 | 0.000 |
+| C spectral | 1920 | 26.033 | 192x | 500 | 280 | 11 | 0.048 |
+
+For the separate amplitude fixture at 480-sample chunks, B produced 381
+confident cues and 8 shape switches (mean weight delta 0.024); C produced no
+confident cues on this deliberately low-band fixture. This is a useful guard
+against presenting the original constant-amplitude fixture as proof that B can
+react to dynamics.
 
 These numbers are implementation evidence, not a perceptual quality claim;
 they depend on the machine and synthetic fixture. The tests additionally cover

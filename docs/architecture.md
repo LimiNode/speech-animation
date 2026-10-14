@@ -30,8 +30,9 @@ sample ranges remain immutable at the presentation layer.
 The opt-in `speech_animation::experimental` target contains a research-only
 audio-reactive shape estimator. Its amplitude and spectral variants emit a
 separate cue type with soft A/E/I/O/U weights and retain `AudioReactive`
-evidence. They are causal, sample-addressed fallbacks and do not alter the
-production analyzer or claim phoneme recognition. See
+evidence. Their analysis frame ends at the cue's own sample range (with a
+shortened warm-up frame), so they never attribute future samples to an earlier
+cue. They do not alter the production analyzer or claim phoneme recognition. See
 `docs/spectral_research.md` for the reproducible A/B/C experiment and its
 current limitations.
 

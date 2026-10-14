@@ -35,6 +35,28 @@ std::vector<float> make_fixture(std::uint32_t sample_rate, std::size_t seconds) 
     return pcm;
 }
 
+std::vector<float> make_amplitude_fixture(std::uint32_t sample_rate,
+                                          std::size_t seconds) {
+    std::vector<float> pcm(sample_rate * seconds);
+    for (std::size_t index = 0; index < pcm.size(); ++index) {
+        const double time = static_cast<double>(index) / sample_rate;
+        float envelope = 0.0F;
+        if (time >= 0.5 && time < 1.0) {
+            envelope = 0.06F;
+        } else if (time >= 1.0 && time < 2.0) {
+            envelope = static_cast<float>(0.06 + 0.54 * (time - 1.0));
+        } else if (time >= 2.0 && time < 3.0) {
+            envelope = 0.60F;
+        } else if (time >= 3.5) {
+            envelope = static_cast<float>(0.25 +
+                0.25 * std::sin(2.0 * 3.141592653589793 * 2.0 * (time - 3.5)));
+        }
+        pcm[index] = envelope * static_cast<float>(std::sin(
+            2.0 * 3.141592653589793 * 440.0 * time));
+    }
+    return pcm;
+}
+
 Result run_baseline(std::size_t chunk_samples,
                     const std::vector<float>& pcm,
                     std::uint32_t sample_rate) {
@@ -129,29 +151,34 @@ Result run_experimental(std::size_t chunk_samples,
 int main() {
     constexpr std::uint32_t sample_rate = 48000;
     constexpr std::size_t seconds = 5;
-    const auto pcm = make_fixture(sample_rate, seconds);
-    std::cout << "variant,chunk_samples,elapsed_ms,realtime_factor,output_cues,"
+    const auto voiced_pcm = make_fixture(sample_rate, seconds);
+    const auto amplitude_pcm = make_amplitude_fixture(sample_rate, seconds);
+    std::cout << "fixture,variant,chunk_samples,elapsed_ms,realtime_factor,output_cues,"
                  "confident_cues,viseme_switches,mean_weight_delta\n";
-    for (const auto chunk_samples : {std::size_t{80}, std::size_t{480},
-                                     std::size_t{1920}}) {
-        const auto baseline = run_baseline(chunk_samples, pcm, sample_rate);
-        const auto amplitude = run_experimental(
-            chunk_samples, pcm, sample_rate,
-            speech_animation::experimental::AudioReactiveVisemeMode::Amplitude);
-        const auto spectral = run_experimental(
-            chunk_samples, pcm, sample_rate,
-            speech_animation::experimental::AudioReactiveVisemeMode::Spectral);
-        for (const auto& named : {std::pair{"baseline", baseline},
-                                  std::pair{"amplitude", amplitude},
-                                  std::pair{"spectral", spectral}}) {
-            const double factor = (1000.0 * static_cast<double>(seconds)) /
-                                  std::max(0.001, named.second.elapsed_ms);
-            std::cout << named.first << ',' << chunk_samples << ',' << std::fixed
-                      << std::setprecision(3) << named.second.elapsed_ms << ','
-                      << factor << ',' << named.second.output_cues << ','
-                      << named.second.confident_cues << ','
-                      << named.second.viseme_switches << ','
-                      << named.second.mean_weight_delta << '\n';
+    for (const auto& fixture : {std::pair{"voiced", &voiced_pcm},
+                                std::pair{"amplitude", &amplitude_pcm}}) {
+        for (const auto chunk_samples : {std::size_t{80}, std::size_t{480},
+                                         std::size_t{1920}}) {
+            const auto baseline = run_baseline(chunk_samples, *fixture.second, sample_rate);
+            const auto amplitude = run_experimental(
+                chunk_samples, *fixture.second, sample_rate,
+                speech_animation::experimental::AudioReactiveVisemeMode::Amplitude);
+            const auto spectral = run_experimental(
+                chunk_samples, *fixture.second, sample_rate,
+                speech_animation::experimental::AudioReactiveVisemeMode::Spectral);
+            for (const auto& named : {std::pair{"baseline", baseline},
+                                      std::pair{"amplitude", amplitude},
+                                      std::pair{"spectral", spectral}}) {
+                const double factor = (1000.0 * static_cast<double>(seconds)) /
+                                      std::max(0.001, named.second.elapsed_ms);
+                std::cout << fixture.first << ',' << named.first << ',' << chunk_samples
+                          << ',' << std::fixed << std::setprecision(3)
+                          << named.second.elapsed_ms << ',' << factor << ','
+                          << named.second.output_cues << ','
+                          << named.second.confident_cues << ','
+                          << named.second.viseme_switches << ','
+                          << named.second.mean_weight_delta << '\n';
+            }
         }
     }
 }

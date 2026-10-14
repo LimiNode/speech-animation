@@ -10,6 +10,7 @@ namespace speech_animation::experimental {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846F;
+constexpr std::uint32_t kMaxWindowSamples = 65536U;
 
 float clamp01(float value) noexcept {
     return std::max(0.0F, std::min(1.0F, value));
@@ -92,6 +93,9 @@ void AudioReactiveVisemeAnalyzer::initialize(std::uint64_t first_sample,
     if (window_samples_ == 0 || hop_samples_ == 0) {
         throw std::invalid_argument("spectral window and hop must be non-zero");
     }
+    if (window_samples_ > kMaxWindowSamples) {
+        throw std::invalid_argument("spectral window exceeds bounded maximum");
+    }
     ring_.assign(window_samples_, 0.0F);
     window_weights_.resize(window_samples_);
     for (std::uint32_t index = 0; index < window_samples_; ++index) {
@@ -158,9 +162,13 @@ std::vector<AudioReactiveVisemeCue> AudioReactiveVisemeAnalyzer::feed(
         ++observed_count_;
         ++next_sample_;
 
-        while (observed_count_ >=
-               (next_output_sample_ - first_sample_) + window_samples_) {
-            result.push_back(make_cue(next_output_sample_, hop_samples_, window_samples_));
+        // A cue is published only once its own [begin, end) range is observed.
+        // The analysis frame ends at that same end position; it never borrows
+        // samples from a later interval. During warm-up the frame is shorter
+        // than the configured window and grows until the ring is full.
+        while (next_sample_ - next_output_sample_ >= hop_samples_) {
+            result.push_back(make_cue(next_output_sample_, hop_samples_,
+                                      std::min(stored_count_, window_samples_)));
             next_output_sample_ += hop_samples_;
         }
     }
@@ -303,8 +311,10 @@ AudioReactiveVisemeAnalyzer::band_energy(std::uint32_t frame_count) const {
         const float power = previous_previous * previous_previous +
                             previous * previous - coefficient_value *
                             previous * previous_previous;
+        const double frame_scale = static_cast<double>(frame_count) *
+                                    static_cast<double>(frame_count);
         return std::max(0.0F, power) /
-               std::max(1.0F, static_cast<float>(frame_count * frame_count));
+               static_cast<float>(std::max(1.0, frame_scale));
     };
 
     const auto band = [&](float begin_hz, float end_hz) {

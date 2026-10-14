@@ -103,17 +103,48 @@ int main() {
         }
         CHECK(covered == pcm.size());
 
-        // No estimate is available before the causal window exists.
+        // No cue is available before the first output hop is observed.
         AudioReactiveVisemeAnalyzer causal;
-        const auto short_pcm = sine(sample_rate, 440.0F, 1439);
+        const auto short_pcm = sine(sample_rate, 440.0F, 479);
         CHECK(causal.feed(PcmChunk{18, 100, sample_rate, short_pcm.data(),
                                    static_cast<std::uint32_t>(short_pcm.size())}).empty());
         const auto first = sine(sample_rate, 440.0F, 1);
-        const auto available = causal.feed(PcmChunk{18, 1539, sample_rate,
+        const auto available = causal.feed(PcmChunk{18, 579, sample_rate,
                                                     first.data(), 1});
         CHECK(available.size() == 1);
         CHECK(available.front().sample_begin == 100);
         CHECK(available.front().sample_count == 480);
+
+        // Window and output hop are independent, but publication never runs
+        // past the observed frontier. Warm-up uses a shortened causal frame.
+        for (const auto window : {80U, 480U, 960U}) {
+            AudioReactiveVisemeConfig boundary;
+            boundary.window_samples = window;
+            boundary.output_hop_samples = 480;
+            AudioReactiveVisemeAnalyzer analyzer(boundary);
+            const auto samples = sine(sample_rate, 440.0F, 960);
+            CHECK(analyzer.feed(PcmChunk{19, 0, sample_rate, samples.data(), 479}).empty());
+            const auto first_hop = analyzer.feed(
+                PcmChunk{19, 479, sample_rate, samples.data() + 479, 1});
+            CHECK(first_hop.size() == 1);
+            CHECK(first_hop.front().sample_begin == 0);
+            CHECK(first_hop.front().sample_count == 480);
+            CHECK(first_hop.front().sample_begin + first_hop.front().sample_count <= 480);
+        }
+
+        // A short utterance produces a clipped, observed tail rather than a
+        // fabricated full hop.
+        AudioReactiveVisemeConfig short_config;
+        short_config.window_samples = 960;
+        short_config.output_hop_samples = 480;
+        AudioReactiveVisemeAnalyzer short_analyzer(short_config);
+        const auto short_utterance = sine(sample_rate, 440.0F, 100);
+        CHECK(short_analyzer.feed(PcmChunk{20, 0, sample_rate,
+                                           short_utterance.data(), 100}).empty());
+        const auto short_tail = short_analyzer.flush();
+        CHECK(short_tail.size() == 1);
+        CHECK(short_tail.front().sample_begin == 0);
+        CHECK(short_tail.front().sample_count == 100);
 
         // Silence has no confident shape and never fabricates pronunciation.
         const std::vector<float> silence(2000, 0.0F);
@@ -184,6 +215,18 @@ int main() {
             rejected = true;
         }
         CHECK(rejected);
+
+        AudioReactiveVisemeConfig oversized;
+        oversized.window_samples = 65537;
+        AudioReactiveVisemeAnalyzer bounded(oversized);
+        const auto one_sample = sine(sample_rate, 440.0F, 1);
+        bool oversized_rejected = false;
+        try {
+            (void)bounded.feed(PcmChunk{21, 0, sample_rate, one_sample.data(), 1});
+        } catch (const std::invalid_argument&) {
+            oversized_rejected = true;
+        }
+        CHECK(oversized_rejected);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
