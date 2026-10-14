@@ -27,6 +27,14 @@ future pronunciation provider may add `PredictedPronunciation` spans, while a
 later aligner may refine only future spans to `AcousticAligned`; already played
 sample ranges remain immutable at the presentation layer.
 
+The opt-in `speech_animation::experimental` target contains a research-only
+audio-reactive shape estimator. Its amplitude and spectral variants emit a
+separate cue type with soft A/E/I/O/U weights and retain `AudioReactive`
+evidence. They are causal, sample-addressed fallbacks and do not alter the
+production analyzer or claim phoneme recognition. See
+`docs/spectral_research.md` for the reproducible A/B/C experiment and its
+current limitations.
+
 The fixed-hop public representation is the production-facing v0 shape. The
 benchmark compares 1-sample, 80-sample, 10 ms, 40 ms, and 80 ms input chunks;
 all produce the same sample-addressed hop timeline. A future adapter may choose
