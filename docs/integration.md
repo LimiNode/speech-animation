@@ -29,6 +29,14 @@ neutral selection when the cursor is unavailable, stale, before/after the
 available ranges, or already past a terminal fade. It never uses callback wall
 clock timestamps or interpolates across a gap.
 
+Prepared pronunciation predictions are appended separately with
+`append_prediction(request_id, sample_rate, PredictedVisemeCue)`. They are
+validated and kept on their own bounded sample-addressed track, so they cannot
+change the PCM receipt timeline. On a playback tick, a prediction covering the
+cursor is exposed as `PlaybackAnimationSelection::viseme`; if no prediction is
+available, the selection contains no viseme and the presentation adapter uses
+the audio-reactive `mouth_open`/activity fallback.
+
 `complete()` and `cancel()` first drain already accepted chunks. They then emit
 exactly one `TerminalFade` receipt anchored at the next canonical sample
 position. This receipt has `output_sample_count = 0` because no synthetic PCM is

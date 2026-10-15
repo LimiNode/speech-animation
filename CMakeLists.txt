@@ -6,6 +6,7 @@ find_package(Threads REQUIRED)
 option(SPEECH_ANIMATION_BUILD_TESTS "Build speech-animation tests" ON)
 option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF)
 option(SPEECH_ANIMATION_BUILD_RESEARCH "Build experimental audio-reactive research target" OFF)
+option(SPEECH_ANIMATION_BUILD_TOOLS "Build corpus and inspection tools" OFF)
 
 add_library(speech_animation
     core/src/analyzer.cpp
@@ -102,6 +103,13 @@ if(SPEECH_ANIMATION_BUILD_BENCHMARKS)
         target_link_libraries(speech_animation_spectral_benchmark PRIVATE
             speech_animation::experimental)
     endif()
+
+endif()
+
+if(SPEECH_ANIMATION_BUILD_TOOLS AND SPEECH_ANIMATION_BUILD_RESEARCH)
+    add_executable(speech_animation_spectral_corpus tools/spectral_corpus.cpp)
+    target_link_libraries(speech_animation_spectral_corpus PRIVATE
+        speech_animation::experimental)
 endif()
 
 include(GNUInstallDirs)

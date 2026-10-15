@@ -34,6 +34,18 @@ SpeechAnimationReceipt fade(std::uint64_t request_id, std::uint64_t anchor) {
     return receipt;
 }
 
+speech_animation::PredictedVisemeCue predicted(std::uint64_t first_sample,
+                             std::uint32_t sample_count,
+                             speech_animation::Viseme value,
+                             float confidence = 0.8F) {
+    speech_animation::PredictedVisemeCue cue;
+    cue.sample_begin = first_sample;
+    cue.sample_count = sample_count;
+    cue.estimate = speech_animation::VisemeEstimate{
+        value, confidence, speech_animation::AnimationEvidence::PredictedPronunciation};
+    return cue;
+}
+
 PlaybackCursorSnapshot cursor(
     std::uint64_t epoch,
     std::uint64_t request_id,
@@ -50,6 +62,38 @@ int main() {
     assert(selector.append(audio(42, 200, 100, 0.75F)));
     assert(selector.append(fade(42, 300)));
 
+    // Predictive cues overlay the audio-reactive timeline without changing
+    // its sample ranges; uncovered ranges retain the audio fallback.
+    selector.reset(7, 42);
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    assert(selector.append(audio(42, 200, 100, 0.75F)));
+    assert(selector.append_prediction(42, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(selector.append_prediction(42, 1000, predicted(200, 100, speech_animation::Viseme::O)));
+    const auto predicted_first = selector.select(cursor(7, 42, 150));
+    assert(predicted_first.viseme.has_value());
+    assert(predicted_first.viseme->value == speech_animation::Viseme::A);
+    assert(predicted_first.viseme->evidence ==
+           speech_animation::AnimationEvidence::PredictedPronunciation);
+    selector.reset(7, 42);
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    const auto fallback = selector.select(cursor(7, 42, 150));
+    assert(!fallback.viseme.has_value());
+    assert(fallback.mouth_open == 0.25F);
+
+    selector.reset(7, 42);
+    assert(!selector.append_prediction(41, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(selector.append_prediction(42, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(!selector.append_prediction(42, 1000, predicted(250, 100, speech_animation::Viseme::O)));
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    assert(selector.append(fade(42, 200)));
+    assert(!selector.append_prediction(42, 1000, predicted(200, 100, speech_animation::Viseme::O)));
+    assert(selector.select(cursor(7, 42, 150)).to_json().find("\"viseme\"") !=
+           std::string::npos);
+
+    selector.reset(7, 42);
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    assert(selector.append(audio(42, 200, 100, 0.75F)));
+    assert(selector.append(fade(42, 300)));
     const auto first = selector.select(cursor(7, 42, 150));
     assert(first.status == PlaybackSelectionStatus::Selected);
     assert(first.mouth_open == 0.25F);
