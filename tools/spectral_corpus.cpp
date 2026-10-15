@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <codecvt>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iterator>
 #include <iostream>
@@ -11,6 +13,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 using speech_animation::PcmChunk;
 using speech_animation::Viseme;
@@ -212,7 +219,7 @@ void emit(const AudioReactiveVisemeCue& cue, AudioReactiveVisemeMode mode) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     try {
         if (argc < 3 || (std::string(argv[1]) != "--input" && std::string(argv[1]) != "-i")) {
             std::cerr << "usage: speech_animation_spectral_corpus --input file.wav [--mode amplitude|spectral]\n";
@@ -229,7 +236,7 @@ int main(int argc, char** argv) {
                 ++index;
             }
         }
-        std::ifstream stream(input, std::ios::binary);
+        std::ifstream stream(std::filesystem::u8path(input), std::ios::binary);
         if (!stream) throw std::runtime_error("cannot open input WAV");
         const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(stream)), {});
         const auto wav = parse_wav(bytes);
@@ -255,3 +262,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+
+#ifdef _WIN32
+int main() {
+    int argc = 0;
+    auto* wide_argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (wide_argv == nullptr) return 1;
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    std::vector<std::string> utf8;
+    utf8.reserve(static_cast<std::size_t>(argc));
+    std::vector<char*> narrow;
+    narrow.reserve(static_cast<std::size_t>(argc));
+    for (int index = 0; index < argc; ++index) {
+        utf8.push_back(converter.to_bytes(wide_argv[index]));
+    }
+    LocalFree(wide_argv);
+    for (auto& argument : utf8) narrow.push_back(argument.data());
+    return run(argc, narrow.data());
+}
+#else
+int main(int argc, char** argv) {
+    return run(argc, argv);
+}
+#endif

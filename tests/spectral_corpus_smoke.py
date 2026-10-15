@@ -55,7 +55,9 @@ def expect_failure(executable, path):
 
 def main():
     executable = os.path.abspath(sys.argv[1])
-    with tempfile.TemporaryDirectory(prefix="speech animation тест ") as directory:
+    # Keep the temporary directory creation portable on Windows Python builds;
+    # the executable still receives and round-trips backslashes and spaces.
+    with tempfile.TemporaryDirectory(prefix="speech animation ") as directory:
         cases = [(1, 8, 1), (1, 16, 1), (1, 24, 1),
                  (1, 32, 1), (3, 32, 1), (1, 16, 2)]
         for index, (format_code, bits, channels) in enumerate(cases):
