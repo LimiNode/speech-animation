@@ -5,6 +5,7 @@ find_package(Threads REQUIRED)
 
 option(SPEECH_ANIMATION_BUILD_TESTS "Build speech-animation tests" ON)
 option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF)
+option(SPEECH_ANIMATION_BUILD_RESEARCH "Build experimental audio-reactive research target" OFF)
 
 add_library(speech_animation
     core/src/analyzer.cpp
@@ -42,6 +43,25 @@ else()
     target_compile_options(speech_animation_integration PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+if(SPEECH_ANIMATION_BUILD_RESEARCH)
+    add_library(speech_animation_experimental
+        core/src/experimental_spectral.cpp
+    )
+    add_library(speech_animation::experimental ALIAS speech_animation_experimental)
+    target_compile_features(speech_animation_experimental PUBLIC cxx_std_17)
+    target_link_libraries(speech_animation_experimental PUBLIC speech_animation::speech_animation)
+    target_include_directories(speech_animation_experimental
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>
+            $<INSTALL_INTERFACE:include>
+    )
+    if(MSVC)
+        target_compile_options(speech_animation_experimental PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(speech_animation_experimental PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
 if(SPEECH_ANIMATION_BUILD_TESTS)
     enable_testing()
     add_executable(speech_animation_tests tests/analyzer_tests.cpp)
@@ -65,11 +85,23 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
     target_link_libraries(speech_animation_playback_tests PRIVATE
         speech_animation::integration)
     add_test(NAME speech_animation_playback_tests COMMAND speech_animation_playback_tests)
+
+    if(SPEECH_ANIMATION_BUILD_RESEARCH)
+        add_executable(speech_animation_spectral_tests tests/spectral_tests.cpp)
+        target_link_libraries(speech_animation_spectral_tests PRIVATE
+            speech_animation::experimental)
+        add_test(NAME speech_animation_spectral_tests COMMAND speech_animation_spectral_tests)
+    endif()
 endif()
 
 if(SPEECH_ANIMATION_BUILD_BENCHMARKS)
     add_executable(speech_animation_benchmark benchmarks/analyzer_benchmark.cpp)
     target_link_libraries(speech_animation_benchmark PRIVATE speech_animation::speech_animation)
+    if(SPEECH_ANIMATION_BUILD_RESEARCH)
+        add_executable(speech_animation_spectral_benchmark benchmarks/spectral_benchmark.cpp)
+        target_link_libraries(speech_animation_spectral_benchmark PRIVATE
+            speech_animation::experimental)
+    endif()
 endif()
 
 include(GNUInstallDirs)

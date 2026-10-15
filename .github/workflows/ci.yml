@@ -18,10 +18,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSPEECH_ANIMATION_BUILD_TESTS=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSPEECH_ANIMATION_BUILD_TESTS=ON -DSPEECH_ANIMATION_BUILD_RESEARCH=ON
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }}
 
       - name: Test
         run: ctest --test-dir build --build-config ${{ matrix.build_type }} --output-on-failure
+
+      - name: Configure production-only
+        run: cmake -S . -B build-production-only -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSPEECH_ANIMATION_BUILD_TESTS=ON -DSPEECH_ANIMATION_BUILD_RESEARCH=OFF
+
+      - name: Build production-only
+        run: cmake --build build-production-only --config ${{ matrix.build_type }}
+
+      - name: Test production-only
+        run: ctest --test-dir build-production-only --build-config ${{ matrix.build_type }} --output-on-failure
