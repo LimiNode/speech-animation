@@ -155,6 +155,16 @@ int main() {
             CHECK(cue.weights.a == 0.0F && cue.weights.e == 0.0F &&
                   cue.weights.i == 0.0F && cue.weights.o == 0.0F && cue.weights.u == 0.0F);
         }
+        AudioReactiveVisemeConfig amplitude_silence;
+        amplitude_silence.mode = AudioReactiveVisemeMode::Amplitude;
+        const auto silent_amplitude = run_partition(
+            silence, sample_rate, {silence.size()}, amplitude_silence);
+        for (const auto& cue : silent_amplitude) {
+            CHECK(cue.activity == SpeechActivity::Silence);
+            CHECK(!cue.viseme.has_value());
+            CHECK(cue.weights.a == 0.0F && cue.weights.e == 0.0F &&
+                  cue.weights.i == 0.0F && cue.weights.o == 0.0F && cue.weights.u == 0.0F);
+        }
 
         // Frequencies are specified in Hz, so the same fixture remains valid
         // at all supported sample rates.

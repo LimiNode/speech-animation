@@ -23,7 +23,10 @@ other projects.
 Neither B nor C recognizes a phoneme. A present estimate always carries
 `AnimationEvidence::AudioReactive`, and confidence is capped by
 `maximum_confidence` (0.60 by default). Silence, weak energy, and low spectral
-contrast leave `viseme` empty while retaining the generic energy/activity data.
+contrast leave `viseme` empty and force all shape weights to zero while
+retaining the generic energy/activity data. This silence gate is part of the
+experimental cue contract so a presentation adapter cannot open the mouth by
+consuming weights directly.
 
 The analyzer is causal: a cue is emitted only after its own output range is
 observed, and its analysis frame ends exactly at that range's end. During
