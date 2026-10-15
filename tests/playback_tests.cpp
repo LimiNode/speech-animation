@@ -1,23 +1,39 @@
 #include "speech_animation/playback.hpp"
 
 #include <cassert>
+#include <iostream>
 #include <stdexcept>
+#include <string>
 
 using namespace speech_animation::integration;
 
 namespace {
 
+void check(bool condition, const char* expression, const char* file, int line) {
+    if (!condition) {
+        throw std::runtime_error(std::string(file) + ":" + std::to_string(line) +
+                                 ": CHECK failed: " + expression);
+    }
+}
+
+#define CHECK(expression) check((expression), #expression, __FILE__, __LINE__)
+#ifdef assert
+#undef assert
+#endif
+#define assert(expression) CHECK(expression)
+
 SpeechAnimationReceipt audio(
     std::uint64_t request_id,
     std::uint64_t first_sample,
     std::uint32_t sample_count,
-    float mouth_open) {
+    float mouth_open,
+    std::uint32_t sample_rate = 1000) {
     SpeechAnimationReceipt receipt;
     receipt.kind = SpeechAnimationReceiptKind::AudioSpan;
     receipt.request_id = request_id;
     receipt.output_first_sample = first_sample;
     receipt.output_sample_count = sample_count;
-    receipt.sample_rate = 1000;
+    receipt.sample_rate = sample_rate;
     receipt.activity = speech_animation::SpeechActivity::Active;
     receipt.mouth_open = mouth_open;
     return receipt;
@@ -67,8 +83,8 @@ int main() {
     selector.reset(7, 42);
     assert(selector.append(audio(42, 100, 100, 0.25F)));
     assert(selector.append(audio(42, 200, 100, 0.75F)));
-    assert(selector.append_prediction(42, 1000, predicted(100, 100, speech_animation::Viseme::A)));
-    assert(selector.append_prediction(42, 1000, predicted(200, 100, speech_animation::Viseme::O)));
+    assert(selector.append_prediction(7, 42, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(selector.append_prediction(7, 42, 1000, predicted(200, 100, speech_animation::Viseme::O)));
     const auto predicted_first = selector.select(cursor(7, 42, 150));
     assert(predicted_first.viseme.has_value());
     assert(predicted_first.viseme->value == speech_animation::Viseme::A);
@@ -81,14 +97,35 @@ int main() {
     assert(fallback.mouth_open == 0.25F);
 
     selector.reset(7, 42);
-    assert(!selector.append_prediction(41, 1000, predicted(100, 100, speech_animation::Viseme::A)));
-    assert(selector.append_prediction(42, 1000, predicted(100, 100, speech_animation::Viseme::A)));
-    assert(!selector.append_prediction(42, 1000, predicted(250, 100, speech_animation::Viseme::O)));
+    assert(!selector.append_prediction(6, 41, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(!selector.append_prediction(7, 41, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(selector.append_prediction(7, 42, 1000, predicted(100, 100, speech_animation::Viseme::A)));
+    assert(!selector.append_prediction(7, 42, 1000, predicted(250, 100, speech_animation::Viseme::O)));
     assert(selector.append(audio(42, 100, 100, 0.25F)));
     assert(selector.append(fade(42, 200)));
-    assert(!selector.append_prediction(42, 1000, predicted(200, 100, speech_animation::Viseme::O)));
+    assert(!selector.append_prediction(7, 42, 1000, predicted(200, 100, speech_animation::Viseme::O)));
     assert(selector.select(cursor(7, 42, 150)).to_json().find("\"viseme\"") !=
            std::string::npos);
+
+    selector.reset(7, 42);
+    assert(selector.append(audio(42, 100, 100, 0.25F)));
+    assert(!selector.append_prediction(7, 42, 48000,
+                                        predicted(100, 100, speech_animation::Viseme::A)));
+    assert(selector.append_prediction(7, 42, 1000,
+                                      predicted(100, 100, speech_animation::Viseme::A)));
+    selector.reset(8, 42);
+    assert(!selector.append_prediction(7, 42, 1000,
+                                       predicted(100, 100, speech_animation::Viseme::O)));
+    assert(selector.append_prediction(8, 42, 1000,
+                                      predicted(100, 100, speech_animation::Viseme::O)));
+
+    selector.reset(9, 42);
+    assert(selector.append_prediction(9, 42, 1000,
+                                      predicted(100, 100, speech_animation::Viseme::A)));
+    assert(!selector.append(audio(42, 100, 100, 0.25F, 48000)));
+    assert(selector.append(audio(42, 100, 100, 0.25F, 1000)));
+    assert(selector.append_prediction(9, 42, 1000,
+                                      predicted(200, 100, speech_animation::Viseme::O)));
 
     selector.reset(7, 42);
     assert(selector.append(audio(42, 100, 100, 0.25F)));

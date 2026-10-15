@@ -30,7 +30,9 @@ available ranges, or already past a terminal fade. It never uses callback wall
 clock timestamps or interpolates across a gap.
 
 Prepared pronunciation predictions are appended separately with
-`append_prediction(request_id, sample_rate, PredictedVisemeCue)`. They are
+`append_prediction(playback_epoch, request_id, sample_rate, PredictedVisemeCue)`.
+The epoch is mandatory so delayed producers from an earlier playback cannot
+inject cues after `reset()`. They are
 validated and kept on their own bounded sample-addressed track, so they cannot
 change the PCM receipt timeline. On a playback tick, a prediction covering the
 cursor is exposed as `PlaybackAnimationSelection::viseme`; if no prediction is

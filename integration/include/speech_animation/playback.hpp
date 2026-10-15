@@ -90,7 +90,8 @@ public:
     /// Appends a sample-addressed pronunciation prediction. Predictions are
     /// kept separate from audio receipts so they cannot alter the canonical
     /// playback timeline. They are overlaid when selecting an audio cue.
-    bool append_prediction(std::uint64_t request_id,
+    bool append_prediction(std::uint64_t playback_epoch,
+                           std::uint64_t request_id,
                            std::uint32_t sample_rate,
                            const PredictedVisemeCue& cue);
 

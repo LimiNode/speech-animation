@@ -134,7 +134,7 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
     }
     if (receipt.kind == SpeechAnimationReceiptKind::AudioSpan) {
         if (receipt.terminal || receipt.output_sample_count == 0 ||
-            (initialized_ && receipt.sample_rate != sample_rate_) ||
+            (sample_rate_ != 0 && receipt.sample_rate != sample_rate_) ||
             (receipt.output_first_sample != next_sample_ && initialized_) ||
             receipt.output_first_sample >
                 std::numeric_limits<std::uint64_t>::max() - receipt.output_sample_count) {
@@ -177,10 +177,12 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
 }
 
 bool PlaybackLockedCueSelector::append_prediction(
+    std::uint64_t playback_epoch,
     std::uint64_t request_id,
     std::uint32_t sample_rate,
     const PredictedVisemeCue& cue) {
-    if (terminal_received_ || request_id == 0 || request_id != request_id_ ||
+    if (terminal_received_ || playback_epoch != playback_epoch_ ||
+        request_id == 0 || request_id != request_id_ ||
         sample_rate == 0 || cue.sample_count == 0 ||
         cue.sample_begin > std::numeric_limits<std::uint64_t>::max() - cue.sample_count ||
         cue.estimate.evidence != AnimationEvidence::PredictedPronunciation ||
@@ -191,7 +193,7 @@ bool PlaybackLockedCueSelector::append_prediction(
     if (!predictions_.empty() && cue.sample_begin != next_prediction_sample_) {
         return false;
     }
-    if (!predictions_.empty() && sample_rate != sample_rate_) {
+    if (sample_rate_ != 0 && sample_rate != sample_rate_) {
         return false;
     }
     if (predictions_.size() >= max_cue_count_) {

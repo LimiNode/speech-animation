@@ -45,6 +45,7 @@ struct Wav {
     std::uint16_t channels = 0;
     std::uint16_t format = 0;
     std::uint16_t bits = 0;
+    std::uint16_t block_align = 0;
     std::size_t data_offset = 0;
     std::size_t data_size = 0;
 };
@@ -52,6 +53,10 @@ struct Wav {
 Wav parse_wav(const std::vector<std::uint8_t>& bytes) {
     if (bytes.size() < 12 || tag(bytes, 0) != "RIFF" || tag(bytes, 8) != "WAVE") {
         throw std::runtime_error("input is not a RIFF/WAVE file");
+    }
+    const auto container_size = static_cast<std::size_t>(u32(bytes, 4));
+    if (container_size < 4 || container_size + 8 > bytes.size()) {
+        throw std::runtime_error("invalid RIFF container size");
     }
     Wav wav;
     std::size_t offset = 12;
@@ -65,6 +70,7 @@ Wav parse_wav(const std::vector<std::uint8_t>& bytes) {
             wav.format = u16(bytes, offset);
             wav.channels = u16(bytes, offset + 2);
             wav.sample_rate = u32(bytes, offset + 4);
+            wav.block_align = u16(bytes, offset + 12);
             wav.bits = u16(bytes, offset + 14);
         }
         else if (id == "data") {
@@ -77,7 +83,7 @@ Wav parse_wav(const std::vector<std::uint8_t>& bytes) {
         throw std::runtime_error("WAV lacks format or data");
     }
     if (wav.format != 1 && wav.format != 3) {
-        throw std::runtime_error("WAV must be PCM integer or IEEE float");
+        throw std::runtime_error("WAV must be PCM integer or IEEE float; WAVE_FORMAT_EXTENSIBLE is unsupported");
     }
     if (wav.format == 3 && wav.bits != 32) {
         throw std::runtime_error("IEEE float WAV must be 32-bit");
@@ -86,6 +92,9 @@ Wav parse_wav(const std::vector<std::uint8_t>& bytes) {
         throw std::runtime_error("unsupported PCM bit depth");
     }
     const auto bytes_per_sample = (wav.bits + 7U) / 8U;
+    if (wav.block_align != bytes_per_sample * wav.channels) {
+        throw std::runtime_error("WAV block alignment does not match format");
+    }
     if (wav.data_size % (bytes_per_sample * wav.channels) != 0) {
         throw std::runtime_error("WAV data is not frame-aligned");
     }
@@ -133,6 +142,34 @@ std::vector<float> decode_mono(const std::vector<std::uint8_t>& bytes, const Wav
 
 const char* mode_name(AudioReactiveVisemeMode mode) {
     return mode == AudioReactiveVisemeMode::Amplitude ? "amplitude" : "spectral";
+}
+
+std::string json_escape(const std::string& value) {
+    std::string result;
+    result.reserve(value.size());
+    static constexpr char hex[] = "0123456789abcdef";
+    for (const unsigned char character : value) {
+        switch (character) {
+        case '"': result += "\\\""; break;
+        case '\\': result += "\\\\"; break;
+        case '\b': result += "\\b"; break;
+        case '\f': result += "\\f"; break;
+        case '\n': result += "\\n"; break;
+        case '\r': result += "\\r"; break;
+        case '\t': result += "\\t"; break;
+        default:
+            if (character < 0x20U) {
+                result += "\\u00";
+                result.push_back(hex[(character >> 4U) & 0x0FU]);
+                result.push_back(hex[character & 0x0FU]);
+            }
+            else {
+                result.push_back(static_cast<char>(character));
+            }
+            break;
+        }
+    }
+    return result;
 }
 
 const char* viseme_name(Viseme value) {
@@ -197,12 +234,15 @@ int main(int argc, char** argv) {
         const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(stream)), {});
         const auto wav = parse_wav(bytes);
         const auto samples = decode_mono(bytes, wav);
+        if (samples.size() > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error("WAV is too long for the analyzer input contract");
+        }
         AudioReactiveVisemeConfig config;
         config.mode = mode;
         AudioReactiveVisemeAnalyzer analyzer(config);
         const PcmChunk chunk{1, 0, wav.sample_rate, samples.data(),
                              static_cast<std::uint32_t>(samples.size())};
-        std::cout << "{\"kind\":\"metadata\",\"input\":\"" << input
+        std::cout << "{\"kind\":\"metadata\",\"input\":\"" << json_escape(input)
                   << "\",\"sample_rate\":" << wav.sample_rate
                   << ",\"sample_count\":" << samples.size()
                   << ",\"channels\":" << wav.channels << "}\n";

@@ -25,7 +25,12 @@ and channel count). Each following `audio_span` record is sample-addressed and
 contains `energy`, `mouth_open`, `activity`, soft A/E/I/O/U weights, and an
 optional low-confidence audio-reactive viseme hypothesis. The tool accepts PCM
 8/16/24/32-bit and IEEE-float 32-bit WAV files and downmixes multichannel input
-to mono. No callback timing is used.
+to mono. The supported WAV format codes are classic PCM (`1`) and IEEE float
+(`3` with 32-bit samples); `WAVE_FORMAT_EXTENSIBLE` is intentionally rejected
+until its channel-mask/subformat semantics are specified. RIFF container size,
+block alignment, and frame alignment are validated. The CI corpus smoke test
+covers mono and stereo 8/16/24/32-bit PCM, float32, malformed headers, and
+unsupported format codes. No callback timing is used.
 
 For a TTS validation receipt, keep the JSONL together with the source text,
 language, model identity, seed, WAV SHA-256, analyzer configuration, and tool
