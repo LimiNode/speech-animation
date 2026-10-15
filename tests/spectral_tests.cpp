@@ -155,6 +155,16 @@ int main() {
             CHECK(cue.weights.a == 0.0F && cue.weights.e == 0.0F &&
                   cue.weights.i == 0.0F && cue.weights.o == 0.0F && cue.weights.u == 0.0F);
         }
+        AudioReactiveVisemeConfig amplitude_silence;
+        amplitude_silence.mode = AudioReactiveVisemeMode::Amplitude;
+        const auto silent_amplitude = run_partition(
+            silence, sample_rate, {silence.size()}, amplitude_silence);
+        for (const auto& cue : silent_amplitude) {
+            CHECK(cue.activity == SpeechActivity::Silence);
+            CHECK(!cue.viseme.has_value());
+            CHECK(cue.weights.a == 0.0F && cue.weights.e == 0.0F &&
+                  cue.weights.i == 0.0F && cue.weights.o == 0.0F && cue.weights.u == 0.0F);
+        }
 
         // Frequencies are specified in Hz, so the same fixture remains valid
         // at all supported sample rates.
@@ -205,6 +215,40 @@ int main() {
             }
         }
         CHECK(saw_amplitude_shape);
+
+        // The smoothed-mouth gate is distinct from silence detection: a strong
+        // signal is Active immediately, while a deliberately slow attack keeps
+        // its first cues neutral. Once the gate is crossed, both variants
+        // recover non-zero shape weights.
+        for (const auto mode : {AudioReactiveVisemeMode::Amplitude,
+                                AudioReactiveVisemeMode::Spectral}) {
+            AudioReactiveVisemeConfig slow_attack;
+            slow_attack.mode = mode;
+            slow_attack.window_samples = 480;
+            slow_attack.output_hop_samples = 480;
+            slow_attack.attack_ms = 1000.0F;
+            const auto sustained = sine(sample_rate, 440.0F, 480U * 16U);
+            const auto gated_cues = run_partition(
+                sustained, sample_rate, {sustained.size()}, slow_attack);
+            bool saw_gated_active = false;
+            bool saw_recovered = false;
+            for (const auto& cue : gated_cues) {
+                const float weight_sum = cue.weights.a + cue.weights.e +
+                    cue.weights.i + cue.weights.o + cue.weights.u;
+                if (cue.activity == SpeechActivity::Active &&
+                    cue.mouth_open <= slow_attack.silence_threshold) {
+                    saw_gated_active = true;
+                    CHECK(!cue.viseme.has_value());
+                    CHECK(weight_sum == 0.0F);
+                }
+                if (cue.mouth_open > slow_attack.silence_threshold) {
+                    saw_recovered = true;
+                    CHECK(weight_sum > 0.0F);
+                }
+            }
+            CHECK(saw_gated_active);
+            CHECK(saw_recovered);
+        }
 
         AudioReactiveVisemeConfig invalid;
         invalid.window_ms = std::numeric_limits<float>::quiet_NaN();

@@ -241,6 +241,15 @@ AudioReactiveVisemeCue AudioReactiveVisemeAnalyzer::make_cue(
         ? SpeechActivity::Active
         : SpeechActivity::Silence;
 
+    // Shape weights are presentation-facing data. Keep them neutral while
+    // silent or while the smoothed mouth signal is still below the activity
+    // gate, so a renderer cannot open the mouth on a pause by consuming the
+    // weights directly.
+    if (cue.activity == SpeechActivity::Silence ||
+        cue.mouth_open <= config_.silence_threshold) {
+        return cue;
+    }
+
     const BandEnergy bands = config_.mode == AudioReactiveVisemeMode::Spectral
         ? band_energy(frame_count)
         : BandEnergy{};

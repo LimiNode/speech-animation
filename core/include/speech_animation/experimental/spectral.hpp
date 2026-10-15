@@ -61,6 +61,8 @@ struct AudioReactiveVisemeCue {
     float energy = 0.0F;
     float mouth_open = 0.0F;
     SpeechActivity activity = SpeechActivity::Silence;
+    // Neutral while activity is silent or the smoothed mouth signal is below
+    // the configured silence threshold.
     AudioReactiveVisemeWeights weights;
 
     // Empty means that the signal was silent/noisy or the spectral contrast
