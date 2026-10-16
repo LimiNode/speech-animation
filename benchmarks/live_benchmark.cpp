@@ -26,6 +26,7 @@ int main() {
         }
         LivePcmChunk chunk;
         chunk.source_id = 1;
+        chunk.source_epoch = 1;
         chunk.first_sample = first;
         chunk.sample_rate = sample_rate;
         chunk.pcm = samples;

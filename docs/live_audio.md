@@ -7,7 +7,7 @@ PCM on a monotonic capture sample clock and emits the same
 
 ```text
 capture adapter
-  -> LivePcmChunk(source_id, first_sample, sample_rate, PCM)
+  -> LivePcmChunk(source_id, source_epoch, first_sample, sample_rate, PCM)
   -> bounded SPSC queue
   -> SpeechAnimationAnalyzer
   -> AudioReactive sample-addressed spans
@@ -17,13 +17,22 @@ The session does not import TTS, STT, pronunciation, playback, renderer, or
 operating-system capture APIs. A full queue returns `QueuePushResult::Full`
 without waiting; the capture owner may retry or apply its own backpressure.
 Only the consumer calls the analyzer. `reset()` is lifecycle-owner controlled,
-while source IDs and canonical sample positions fence delayed or mixed input.
+while source IDs, source epochs, and canonical sample positions fence delayed or
+mixed input. A new unique source epoch is required even when a device reuses the
+same source ID and sample clock.
 
-Mute is represented by zero PCM on the same capture clock. This preserves
+Mute is snapshotted when a chunk is admitted, so a chunk captured while muted
+cannot animate the mouth merely because processing happens after unmute. Mute
+is represented by zero PCM on the same capture clock. This preserves
 sample continuity while producing neutral spans. `stop()` drains accepted
 audio and flushes one final partial hop; later chunks are rejected until a
 new `reset()` starts a source epoch. Session restart, device replacement, and
 network stream replacement therefore do not leak adaptive DSP state.
+
+`max_pcm_chunk_samples` bounds the memory of each admitted chunk independently
+of the queue slot count. Oversized chunks are rejected before entering the ring.
+`reset()` and `process_available()` are serialized by the consumer lifecycle
+guard, so reset cannot clear analyzer state while a drain is active.
 
 ## Capture and playback clocks
 
