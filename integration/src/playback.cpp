@@ -155,7 +155,7 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
 
     if (!receipt.terminal || receipt.output_sample_count != 0 ||
         receipt.terminal_fade_sample_count == 0 ||
-        (initialized_ && receipt.sample_rate != sample_rate_) ||
+        (sample_rate_ != 0 && receipt.sample_rate != sample_rate_) ||
         (receipt.input_first_sample != next_sample_ && initialized_) ||
         receipt.input_first_sample >
             std::numeric_limits<std::uint64_t>::max() -

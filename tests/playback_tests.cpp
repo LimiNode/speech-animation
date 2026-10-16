@@ -39,12 +39,13 @@ SpeechAnimationReceipt audio(
     return receipt;
 }
 
-SpeechAnimationReceipt fade(std::uint64_t request_id, std::uint64_t anchor) {
+SpeechAnimationReceipt fade(std::uint64_t request_id, std::uint64_t anchor,
+                            std::uint32_t sample_rate = 1000) {
     SpeechAnimationReceipt receipt;
     receipt.kind = SpeechAnimationReceiptKind::TerminalFade;
     receipt.request_id = request_id;
     receipt.input_first_sample = anchor;
-    receipt.sample_rate = 1000;
+    receipt.sample_rate = sample_rate;
     receipt.terminal = true;
     receipt.terminal_fade_sample_count = 100;
     return receipt;
@@ -126,6 +127,12 @@ int main() {
     assert(selector.append(audio(42, 100, 100, 0.25F, 1000)));
     assert(selector.append_prediction(9, 42, 1000,
                                       predicted(200, 100, speech_animation::Viseme::O)));
+
+    selector.reset(10, 42);
+    assert(selector.append_prediction(10, 42, 1000,
+                                      predicted(100, 100, speech_animation::Viseme::A)));
+    assert(!selector.append(fade(42, 200, 48000)));
+    assert(selector.append(fade(42, 200, 1000)));
 
     selector.reset(7, 42);
     assert(selector.append(audio(42, 100, 100, 0.25F)));
