@@ -6,6 +6,7 @@ find_package(Threads REQUIRED)
 option(SPEECH_ANIMATION_BUILD_TESTS "Build speech-animation tests" ON)
 option(SPEECH_ANIMATION_BUILD_BENCHMARKS "Build speech-animation benchmarks" OFF)
 option(SPEECH_ANIMATION_BUILD_RESEARCH "Build experimental audio-reactive research target" OFF)
+option(SPEECH_ANIMATION_BUILD_TOOLS "Build corpus and inspection tools" OFF)
 
 add_library(speech_animation
     core/src/analyzer.cpp
@@ -101,6 +102,20 @@ if(SPEECH_ANIMATION_BUILD_BENCHMARKS)
         add_executable(speech_animation_spectral_benchmark benchmarks/spectral_benchmark.cpp)
         target_link_libraries(speech_animation_spectral_benchmark PRIVATE
             speech_animation::experimental)
+    endif()
+
+endif()
+
+if(SPEECH_ANIMATION_BUILD_TOOLS AND SPEECH_ANIMATION_BUILD_RESEARCH)
+    add_executable(speech_animation_spectral_corpus tools/spectral_corpus.cpp)
+    target_link_libraries(speech_animation_spectral_corpus PRIVATE
+        speech_animation::experimental)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(SPEECH_ANIMATION_BUILD_TESTS AND Python3_Interpreter_FOUND)
+        add_test(NAME speech_animation_spectral_corpus_smoke
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/spectral_corpus_smoke.py
+                $<TARGET_FILE:speech_animation_spectral_corpus>)
     endif()
 endif()
 

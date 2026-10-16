@@ -1,6 +1,7 @@
 #include "speech_animation/playback.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -21,6 +22,29 @@ const char* status_name(PlaybackSelectionStatus status) noexcept {
     case PlaybackSelectionStatus::TerminalComplete: return "terminal_complete";
     }
     return "cursor_unavailable";
+}
+
+const char* viseme_name(Viseme value) noexcept {
+    switch (value) {
+    case Viseme::Neutral: return "neutral";
+    case Viseme::Closed: return "closed";
+    case Viseme::A: return "a";
+    case Viseme::E: return "e";
+    case Viseme::I: return "i";
+    case Viseme::O: return "o";
+    case Viseme::U: return "u";
+    case Viseme::FV: return "fv";
+    }
+    return "neutral";
+}
+
+const char* evidence_name(AnimationEvidence value) noexcept {
+    switch (value) {
+    case AnimationEvidence::AudioReactive: return "audio_reactive";
+    case AnimationEvidence::PredictedPronunciation: return "predicted_pronunciation";
+    case AnimationEvidence::AcousticAligned: return "acoustic_aligned";
+    }
+    return "audio_reactive";
 }
 
 } // namespace
@@ -71,6 +95,17 @@ std::string PlaybackAnimationSelection::to_json() const {
          << ",\"activity\":\""
          << (activity == SpeechActivity::Active ? "active" : "silence") << '"'
          << ",\"mouth_open\":" << mouth_open
+         << ",\"viseme\":";
+    if (viseme.has_value()) {
+        json << "{\"value\":\"" << viseme_name(viseme->value)
+             << "\",\"confidence\":" << viseme->confidence
+             << ",\"evidence\":\"" << evidence_name(viseme->evidence)
+             << "\"}";
+    }
+    else {
+        json << "null";
+    }
+    json
          << ",\"terminal\":" << (terminal ? "true" : "false")
          << ",\"terminal_fade_progress\":" << terminal_fade_progress
          << ",\"skipped_cue_count\":" << skipped_cue_count << '}';
@@ -87,6 +122,8 @@ void PlaybackLockedCueSelector::reset(
     initialized_ = false;
     terminal_received_ = false;
     cues_.clear();
+    predictions_.clear();
+    next_prediction_sample_ = 0;
     last_selected_cue_index_.reset();
 }
 
@@ -97,7 +134,7 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
     }
     if (receipt.kind == SpeechAnimationReceiptKind::AudioSpan) {
         if (receipt.terminal || receipt.output_sample_count == 0 ||
-            (initialized_ && receipt.sample_rate != sample_rate_) ||
+            (sample_rate_ != 0 && receipt.sample_rate != sample_rate_) ||
             (receipt.output_first_sample != next_sample_ && initialized_) ||
             receipt.output_first_sample >
                 std::numeric_limits<std::uint64_t>::max() - receipt.output_sample_count) {
@@ -118,7 +155,7 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
 
     if (!receipt.terminal || receipt.output_sample_count != 0 ||
         receipt.terminal_fade_sample_count == 0 ||
-        (initialized_ && receipt.sample_rate != sample_rate_) ||
+        (sample_rate_ != 0 && receipt.sample_rate != sample_rate_) ||
         (receipt.input_first_sample != next_sample_ && initialized_) ||
         receipt.input_first_sample >
             std::numeric_limits<std::uint64_t>::max() -
@@ -136,6 +173,37 @@ bool PlaybackLockedCueSelector::append(const SpeechAnimationReceipt& receipt) {
     next_sample_ = receipt.input_first_sample;
     terminal_received_ = true;
     cues_.push_back(receipt);
+    return true;
+}
+
+bool PlaybackLockedCueSelector::append_prediction(
+    std::uint64_t playback_epoch,
+    std::uint64_t request_id,
+    std::uint32_t sample_rate,
+    const PredictedVisemeCue& cue) {
+    if (terminal_received_ || playback_epoch != playback_epoch_ ||
+        request_id == 0 || request_id != request_id_ ||
+        sample_rate == 0 || cue.sample_count == 0 ||
+        cue.sample_begin > std::numeric_limits<std::uint64_t>::max() - cue.sample_count ||
+        cue.estimate.evidence != AnimationEvidence::PredictedPronunciation ||
+        !std::isfinite(cue.estimate.confidence) || cue.estimate.confidence < 0.0F ||
+        cue.estimate.confidence > 1.0F) {
+        return false;
+    }
+    if (!predictions_.empty() && cue.sample_begin != next_prediction_sample_) {
+        return false;
+    }
+    if (sample_rate_ != 0 && sample_rate != sample_rate_) {
+        return false;
+    }
+    if (predictions_.size() >= max_cue_count_) {
+        return false;
+    }
+    predictions_.push_back(cue);
+    next_prediction_sample_ = cue.sample_begin + cue.sample_count;
+    if (sample_rate_ == 0) {
+        sample_rate_ = sample_rate;
+    }
     return true;
 }
 
@@ -161,6 +229,11 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
     if (sample_rate_ != 0 && snapshot.sample_rate != sample_rate_) {
         result.status = PlaybackSelectionStatus::CursorUnavailable;
         return result;
+    }
+    while (predictions_.size() > 1 &&
+           snapshot.utterance_sample >=
+               predictions_.front().sample_begin + predictions_.front().sample_count) {
+        predictions_.pop_front();
     }
     std::size_t skipped = 0;
     for (std::size_t index = 0; index < cues_.size(); ++index) {
@@ -214,6 +287,14 @@ PlaybackAnimationSelection PlaybackLockedCueSelector::select(
             result.activity = cue.activity;
             result.mouth_open = cue.mouth_open;
             result.terminal = false;
+            for (const auto& prediction : predictions_) {
+                const auto prediction_end = prediction.sample_begin + prediction.sample_count;
+                if (snapshot.utterance_sample >= prediction.sample_begin &&
+                    snapshot.utterance_sample < prediction_end) {
+                    result.viseme = prediction.estimate;
+                    break;
+                }
+            }
             result.skipped_cue_count = skipped_since_previous;
             retire_before(index);
             last_selected_cue_index_ = 0;

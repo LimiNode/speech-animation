@@ -1,6 +1,7 @@
 #pragma once
 
 #include "speech_animation/integration.hpp"
+#include "speech_animation/predictive.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +48,10 @@ struct PlaybackAnimationSelection {
     std::uint32_t sample_rate = 0;
     SpeechActivity activity = SpeechActivity::Silence;
     float mouth_open = 0.0F;
+    // Optional linguistic prediction for the selected audio range. When no
+    // prediction covers the cursor, presentation must fall back to the
+    // audio-reactive fields above.
+    std::optional<VisemeEstimate> viseme;
     bool terminal = false;
     float terminal_fade_progress = 0.0F;
     // Number of cue ranges crossed since the previously selected cue. On the
@@ -82,6 +87,14 @@ public:
     /// Appends one ordered audio-span or terminal-fade receipt.
     bool append(const SpeechAnimationReceipt& receipt);
 
+    /// Appends a sample-addressed pronunciation prediction. Predictions are
+    /// kept separate from audio receipts so they cannot alter the canonical
+    /// playback timeline. They are overlaid when selecting an audio cue.
+    bool append_prediction(std::uint64_t playback_epoch,
+                           std::uint64_t request_id,
+                           std::uint32_t sample_rate,
+                           const PredictedVisemeCue& cue);
+
     /// Selects a neutral or active presentation state for one cursor snapshot.
     PlaybackAnimationSelection select(const PlaybackCursorSnapshot& snapshot) const;
 
@@ -98,6 +111,8 @@ private:
     bool terminal_received_ = false;
     std::size_t max_cue_count_ = 4096;
     mutable std::deque<SpeechAnimationReceipt> cues_;
+    mutable std::deque<PredictedVisemeCue> predictions_;
+    std::uint64_t next_prediction_sample_ = 0;
     mutable std::optional<std::size_t> last_selected_cue_index_;
 
     void retire_before(std::size_t index) const;

@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSPEECH_ANIMATION_BUILD_TESTS=ON -DSPEECH_ANIMATION_BUILD_RESEARCH=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSPEECH_ANIMATION_BUILD_TESTS=ON -DSPEECH_ANIMATION_BUILD_RESEARCH=ON -DSPEECH_ANIMATION_BUILD_TOOLS=ON
 
       - name: Build
         run: cmake --build build --config ${{ matrix.build_type }}
