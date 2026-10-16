@@ -15,6 +15,7 @@ add_library(speech_animation::speech_animation ALIAS speech_animation)
 
 add_library(speech_animation_integration
     integration/src/integration.cpp
+    integration/src/live.cpp
     integration/src/playback.cpp
 )
 add_library(speech_animation::integration ALIAS speech_animation_integration)
@@ -86,6 +87,11 @@ if(SPEECH_ANIMATION_BUILD_TESTS)
         speech_animation::integration)
     add_test(NAME speech_animation_playback_tests COMMAND speech_animation_playback_tests)
 
+    add_executable(speech_animation_live_tests tests/live_tests.cpp)
+    target_link_libraries(speech_animation_live_tests PRIVATE
+        speech_animation::integration)
+    add_test(NAME speech_animation_live_tests COMMAND speech_animation_live_tests)
+
     if(SPEECH_ANIMATION_BUILD_RESEARCH)
         add_executable(speech_animation_spectral_tests tests/spectral_tests.cpp)
         target_link_libraries(speech_animation_spectral_tests PRIVATE
@@ -97,6 +103,8 @@ endif()
 if(SPEECH_ANIMATION_BUILD_BENCHMARKS)
     add_executable(speech_animation_benchmark benchmarks/analyzer_benchmark.cpp)
     target_link_libraries(speech_animation_benchmark PRIVATE speech_animation::speech_animation)
+    add_executable(speech_animation_live_benchmark benchmarks/live_benchmark.cpp)
+    target_link_libraries(speech_animation_live_benchmark PRIVATE speech_animation::integration)
     if(SPEECH_ANIMATION_BUILD_RESEARCH)
         add_executable(speech_animation_spectral_benchmark benchmarks/spectral_benchmark.cpp)
         target_link_libraries(speech_animation_spectral_benchmark PRIVATE
