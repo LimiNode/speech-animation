@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace speech_animation::integration {
@@ -35,6 +36,18 @@ struct LiveAudioSessionConfig {
     std::uint32_t max_pcm_chunk_samples = 4096;
 };
 
+// A batch of live cues carries the capture identity alongside the generic
+// sample-addressed spans. Consumers must fence this identity before applying
+// cues: sample positions may legitimately repeat after a source restart.
+struct LiveAudioAnimationBatch {
+    std::uint64_t source_id = 0;
+    std::uint64_t source_epoch = 0;
+    std::vector<SpeechAnimationSpan> spans;
+
+    bool empty() const noexcept { return spans.empty(); }
+    std::size_t size() const noexcept { return spans.size(); }
+};
+
 // A continuous, audio-only capture session. It has no text, pronunciation,
 // playback-device, or renderer dependency. The producer operation is bounded
 // and non-blocking; only the consumer calls the analyzer.
@@ -57,10 +70,11 @@ public:
     // was rejected; no capture thread waits for a consumer.
     QueuePushResult push(LivePcmChunk chunk);
 
-    // Drains queued chunks and returns sample-addressed AudioReactive spans.
+    // Drains queued chunks and returns sample-addressed AudioReactive spans
+    // together with the source identity that produced them.
     // Mute is represented by zero PCM on the same capture clock, preserving
     // continuity without fabricating samples.
-    std::vector<SpeechAnimationSpan> process_available();
+    LiveAudioAnimationBatch process_available();
 
     // Stop is terminal for the current source. process_available() drains
     // accepted PCM and flushes the final partial hop exactly once.
@@ -96,8 +110,12 @@ private:
     std::uint64_t source_epoch_ = 0;
     std::uint64_t next_input_sample_ = 0;
     std::uint32_t sample_rate_ = 0;
+    bool sample_clock_initialized_ = false;
     bool initialized_ = false;
     bool terminal_emitted_ = false;
+    // Coalesced muted range awaiting output. A hop that overlaps this range
+    // is forced neutral even when the range crosses an input chunk boundary.
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> muted_range_;
 };
 
 } // namespace speech_animation::integration

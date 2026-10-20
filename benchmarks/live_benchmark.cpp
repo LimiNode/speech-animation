@@ -32,17 +32,17 @@ int main() {
         chunk.pcm = samples;
         while (session.push(std::move(chunk)) == QueuePushResult::Full) {
             const auto cues = session.process_available();
-            cue_count += cues.size();
+            cue_count += cues.spans.size();
             chunk.source_id = 1;
             chunk.first_sample = first;
             chunk.sample_rate = sample_rate;
             chunk.pcm = samples;
         }
         const auto cues = session.process_available();
-        cue_count += cues.size();
+        cue_count += cues.spans.size();
     }
     session.stop();
-    cue_count += session.process_available().size();
+    cue_count += session.process_available().spans.size();
     const auto elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - start).count();
     std::cout << "seconds=5 elapsed=" << elapsed

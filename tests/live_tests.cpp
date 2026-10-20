@@ -54,13 +54,14 @@ int main() {
         CHECK(session.push(chunk(7, 4, 48000, 4, 0.0F)) == QueuePushResult::Accepted);
         CHECK(session.push(chunk(7, 8, 48000, 4, 0.8F)) == QueuePushResult::Accepted);
         const auto cues = session.process_available();
+        CHECK(cues.source_id == 7 && cues.source_epoch == 1);
         CHECK(cues.size() == 3);
-        CHECK(cues[0].sample_begin == 0 && cues[0].sample_count == 4);
-        CHECK(cues[1].activity == SpeechActivity::Silence);
-        CHECK(cues[0].activity == SpeechActivity::Active);
-        CHECK(cues[2].activity == SpeechActivity::Active);
-        CHECK(cues[0].viseme == std::nullopt);
-        CHECK(cues[0].mouth_open > 0.0F);
+        CHECK(cues.spans[0].sample_begin == 0 && cues.spans[0].sample_count == 4);
+        CHECK(cues.spans[1].activity == SpeechActivity::Silence);
+        CHECK(cues.spans[0].activity == SpeechActivity::Active);
+        CHECK(cues.spans[2].activity == SpeechActivity::Active);
+        CHECK(cues.spans[0].viseme == std::nullopt);
+        CHECK(cues.spans[0].mouth_open > 0.0F);
 
         // The result is invariant under chunk partitioning on the capture clock.
         LiveAudioReactiveSession one(config());
@@ -71,27 +72,56 @@ int main() {
         CHECK(many.push(chunk(8, 107, 24000, 5, 0.6F)) == QueuePushResult::Accepted);
         const auto one_cues = one.process_available();
         const auto many_cues = many.process_available();
+        CHECK(one_cues.source_id == 8 && one_cues.source_epoch == 1);
+        CHECK(many_cues.source_id == 8 && many_cues.source_epoch == 1);
         CHECK(one_cues.size() == many_cues.size());
         for (std::size_t index = 0; index < one_cues.size(); ++index) {
-            CHECK(one_cues[index].sample_begin == many_cues[index].sample_begin);
-            CHECK(one_cues[index].sample_count == many_cues[index].sample_count);
-            CHECK(one_cues[index].mouth_open == many_cues[index].mouth_open);
-            CHECK(one_cues[index].activity == many_cues[index].activity);
+            CHECK(one_cues.spans[index].sample_begin == many_cues.spans[index].sample_begin);
+            CHECK(one_cues.spans[index].sample_count == many_cues.spans[index].sample_count);
+            CHECK(one_cues.spans[index].mouth_open == many_cues.spans[index].mouth_open);
+            CHECK(one_cues.spans[index].activity == many_cues.spans[index].activity);
         }
 
-        // Mute preserves the capture range while producing neutral audio cues.
-        LiveAudioReactiveSession muted(config());
-        muted.set_muted(true);
+        // Mute preserves the capture range while producing neutral audio cues,
+        // even when the analyzer has a non-zero release time and retained an
+        // active pre-mute state.
+        auto muted_config = config();
+        muted_config.analyzer.mouth_release_ms = 200.0F;
+        muted_config.analyzer.energy_release_ms = 200.0F;
+        LiveAudioReactiveSession muted(muted_config);
         CHECK(muted.push(chunk(9, 0, 48000, 4, 0.9F)) == QueuePushResult::Accepted);
+        const auto pre_mute_cues = muted.process_available();
+        CHECK(pre_mute_cues.size() == 1);
+        CHECK(pre_mute_cues.spans.front().mouth_open > 0.0F);
+        muted.set_muted(true);
+        CHECK(muted.push(chunk(9, 4, 48000, 4, 0.9F)) == QueuePushResult::Accepted);
         muted.set_muted(false);
         auto muted_cues = muted.process_available();
         CHECK(muted_cues.size() == 1);
-        CHECK(muted_cues.front().activity == SpeechActivity::Silence);
-        CHECK(muted_cues.front().mouth_open == 0.0F);
-        CHECK(muted.push(chunk(9, 4, 48000, 4, 0.9F)) == QueuePushResult::Accepted);
+        CHECK(muted_cues.source_id == 9 && muted_cues.source_epoch == 1);
+        CHECK(muted_cues.spans.front().activity == SpeechActivity::Silence);
+        CHECK(muted_cues.spans.front().mouth_open == 0.0F);
+        CHECK(muted_cues.spans.front().energy == 0.0F);
+        CHECK(muted.push(chunk(9, 8, 48000, 4, 0.9F)) == QueuePushResult::Accepted);
         const auto unmuted_cues = muted.process_available();
         CHECK(unmuted_cues.size() == 1);
-        CHECK(unmuted_cues.front().activity == SpeechActivity::Active);
+        CHECK(unmuted_cues.spans.front().activity == SpeechActivity::Active);
+
+        // The same neutral contract applies to a muted partial hop flushed by
+        // stop(), not only to completed hops.
+        auto tail_config = muted_config;
+        tail_config.analyzer.output_hop_samples = 8;
+        LiveAudioReactiveSession muted_tail(tail_config);
+        CHECK(muted_tail.push(chunk(9, 0, 48000, 8, 0.9F)) == QueuePushResult::Accepted);
+        CHECK(muted_tail.process_available().size() == 1);
+        muted_tail.set_muted(true);
+        CHECK(muted_tail.push(chunk(9, 8, 48000, 4, 0.9F)) == QueuePushResult::Accepted);
+        muted_tail.set_muted(false);
+        CHECK(muted_tail.stop());
+        const auto muted_tail_cues = muted_tail.process_available();
+        CHECK(muted_tail_cues.size() == 1);
+        CHECK(muted_tail_cues.spans.front().activity == SpeechActivity::Silence);
+        CHECK(muted_tail_cues.spans.front().mouth_open == 0.0F);
 
         // Overflow, discontinuity, source fencing, stop and restart are explicit.
         LiveAudioReactiveSession bounded(config(1));
@@ -117,8 +147,8 @@ int main() {
         LiveAudioReactiveSession right(config());
         CHECK(left.push(chunk(20, 0, 48000, 4, 0.8F)) == QueuePushResult::Accepted);
         CHECK(right.push(chunk(21, 0, 48000, 4, 0.0F)) == QueuePushResult::Accepted);
-        CHECK(left.process_available().front().activity == SpeechActivity::Active);
-        CHECK(right.process_available().front().activity == SpeechActivity::Silence);
+        CHECK(left.process_available().spans.front().activity == SpeechActivity::Active);
+        CHECK(right.process_available().spans.front().activity == SpeechActivity::Silence);
 
         // Reset and consumer drain are serialized; this must not race queue
         // slot cleanup or analyzer state.
@@ -128,6 +158,24 @@ int main() {
         lifecycle.reset(30, 2, 0, 48000);
         consumer.join();
         CHECK(lifecycle.push(chunk(30, 0, 48000, 4, 0.4F, 2)) == QueuePushResult::Accepted);
+
+        // A reset-provided sample clock remains authoritative even when the
+        // sample rate is learned from the first PCM chunk.
+        LiveAudioReactiveSession fenced(config());
+        fenced.reset(40, 7, 100, 0);
+        CHECK(fenced.push(chunk(40, 99, 16000, 4, 0.4F, 7)) == QueuePushResult::Invalid);
+        CHECK(fenced.push(chunk(40, 100, 16000, 4, 0.4F, 7)) == QueuePushResult::Accepted);
+        CHECK(fenced.process_available().source_epoch == 7);
+        fenced.stop();
+        const auto stopped = fenced.process_available();
+        CHECK(stopped.source_id == 40 && stopped.source_epoch == 7);
+
+        // Resetting to a new epoch changes the envelope even when the sample
+        // coordinates and source ID are reused.
+        fenced.reset(40, 8, 100, 16000);
+        CHECK(fenced.push(chunk(40, 100, 16000, 4, 0.4F, 8)) == QueuePushResult::Accepted);
+        const auto restarted = fenced.process_available();
+        CHECK(restarted.source_id == 40 && restarted.source_epoch == 8);
         return 0;
     }
     catch (const std::exception& error) {

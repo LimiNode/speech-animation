@@ -1,5 +1,6 @@
 #include "speech_animation/live.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -56,8 +57,10 @@ void LiveAudioReactiveSession::reset(std::uint64_t source_id,
     source_epoch_ = source_epoch;
     next_input_sample_ = first_sample;
     sample_rate_ = sample_rate;
+    sample_clock_initialized_ = true;
     initialized_ = sample_rate != 0;
     terminal_emitted_ = false;
+    muted_range_.reset();
     muted_.store(false, std::memory_order_release);
     state_.store(LiveSessionState::Active, std::memory_order_release);
 }
@@ -79,10 +82,19 @@ QueuePushResult LiveAudioReactiveSession::initialize_from_chunk(const LivePcmChu
     if (source_epoch_ != 0 && chunk.source_epoch != source_epoch_) {
         return QueuePushResult::Invalid;
     }
+    if (sample_rate_ != 0 && chunk.sample_rate != sample_rate_) {
+        return QueuePushResult::Invalid;
+    }
+    if (sample_clock_initialized_ && chunk.first_sample != next_input_sample_) {
+        return QueuePushResult::Invalid;
+    }
     source_id_ = chunk.source_id;
     source_epoch_ = chunk.source_epoch;
     sample_rate_ = chunk.sample_rate;
-    next_input_sample_ = chunk.first_sample;
+    if (!sample_clock_initialized_) {
+        next_input_sample_ = chunk.first_sample;
+        sample_clock_initialized_ = true;
+    }
     initialized_ = true;
     return QueuePushResult::Accepted;
 }
@@ -146,16 +158,47 @@ void LiveAudioReactiveSession::drain_one(std::vector<SpeechAnimationSpan>& outpu
     }
     const PcmChunk pcm{queued.chunk.source_id, queued.chunk.first_sample,
                        queued.chunk.sample_rate, samples, queued.chunk.sample_count};
+    if (queued.muted_at_capture) {
+        const auto begin = queued.chunk.first_sample;
+        const auto end = begin + queued.chunk.sample_count;
+        if (!muted_range_) {
+            muted_range_ = std::make_pair(begin, end);
+        } else {
+            muted_range_->second = std::max(muted_range_->second, end);
+        }
+    }
     auto spans = analyzer_.feed(pcm);
+    for (auto& span : spans) {
+        const auto span_end = span.sample_begin + span.sample_count;
+        const bool overlaps_muted = muted_range_ &&
+            span.sample_begin < muted_range_->second &&
+            muted_range_->first < span_end;
+        if (overlaps_muted) {
+            // Mute is an explicit presentation contract, not merely an audio
+            // substitution. Release smoothing may retain pre-mute state, so
+            // a muted range must never expose a stale mouth cue. The pending
+            // range also covers hops that cross a chunk boundary.
+            span.energy = 0.0F;
+            span.mouth_open = 0.0F;
+            span.activity = SpeechActivity::Silence;
+            span.viseme.reset();
+        }
+        if (muted_range_ && span_end >= muted_range_->second) {
+            muted_range_.reset();
+        }
+    }
     output.insert(output.end(), spans.begin(), spans.end());
 }
 
-std::vector<SpeechAnimationSpan> LiveAudioReactiveSession::process_available() {
+LiveAudioAnimationBatch LiveAudioReactiveSession::process_available() {
     std::lock_guard<std::mutex> lifecycle_lock(consumer_mutex_);
+    LiveAudioAnimationBatch batch;
+    batch.source_id = source_id_;
+    batch.source_epoch = source_epoch_;
     if (state_.load(std::memory_order_acquire) == LiveSessionState::Resetting) {
-        return {};
+        return batch;
     }
-    std::vector<SpeechAnimationSpan> output;
+    auto& output = batch.spans;
     while (true) {
         auto read = read_index_.load(std::memory_order_relaxed);
         const auto write = write_index_.load(std::memory_order_acquire);
@@ -172,10 +215,23 @@ std::vector<SpeechAnimationSpan> LiveAudioReactiveSession::process_available() {
             drain_one(output);
         }
         const auto tail = analyzer_.flush();
-        output.insert(output.end(), tail.begin(), tail.end());
+        for (auto span : tail) {
+            const auto span_end = span.sample_begin + span.sample_count;
+            const bool overlaps_muted = muted_range_ &&
+                span.sample_begin < muted_range_->second &&
+                muted_range_->first < span_end;
+            if (overlaps_muted) {
+                span.energy = 0.0F;
+                span.mouth_open = 0.0F;
+                span.activity = SpeechActivity::Silence;
+                span.viseme.reset();
+            }
+            output.push_back(std::move(span));
+        }
+        muted_range_.reset();
         terminal_emitted_ = true;
     }
-    return output;
+    return batch;
 }
 
 bool LiveAudioReactiveSession::stop() {

@@ -10,7 +10,7 @@ capture adapter
   -> LivePcmChunk(source_id, source_epoch, first_sample, sample_rate, PCM)
   -> bounded SPSC queue
   -> SpeechAnimationAnalyzer
-  -> AudioReactive sample-addressed spans
+  -> LiveAudioAnimationBatch(source_id, source_epoch, spans)
 ```
 
 The session does not import TTS, STT, pronunciation, playback, renderer, or
@@ -23,11 +23,22 @@ same source ID and sample clock.
 
 Mute is snapshotted when a chunk is admitted, so a chunk captured while muted
 cannot animate the mouth merely because processing happens after unmute. Mute
-is represented by zero PCM on the same capture clock. This preserves
-sample continuity while producing neutral spans. `stop()` drains accepted
+is represented by zero PCM on the same capture clock and the emitted spans are
+explicitly forced to neutral activity, energy, and mouth opening even when
+release smoothing retains pre-mute state. This preserves sample continuity
+while producing neutral spans. `stop()` drains accepted
 audio and flushes one final partial hop; later chunks are rejected until a
 new `reset()` starts a source epoch. Session restart, device replacement, and
 network stream replacement therefore do not leak adaptive DSP state.
+
+`process_available()` returns a `LiveAudioAnimationBatch`, not a bare vector.
+The batch carries `source_id` and `source_epoch` next to its generic spans, so
+presentation code can reject delayed output from an earlier capture restart
+even when sample coordinates are reused.
+
+`reset()` always establishes the first sample position. If `sample_rate` is
+zero, only the rate is learned from the first chunk; the reset-provided sample
+clock remains fenced and cannot be replaced by that chunk.
 
 `max_pcm_chunk_samples` bounds the memory of each admitted chunk independently
 of the queue slot count. Oversized chunks are rejected before entering the ring.
