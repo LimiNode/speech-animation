@@ -94,7 +94,7 @@ private:
         bool muted_at_capture = false;
     };
 
-    void drain_one(std::vector<SpeechAnimationSpan>& output);
+    void drain_one(LiveAudioAnimationBatch& batch);
     QueuePushResult initialize_from_chunk(const LivePcmChunk& chunk);
 
     LiveAudioSessionConfig config_;
@@ -102,9 +102,13 @@ private:
     std::vector<std::optional<QueuedChunk>> queue_;
     std::atomic<std::uint64_t> write_index_{0};
     std::atomic<std::uint64_t> read_index_{0};
-    std::atomic<std::uint32_t> producers_in_flight_{0};
+    // Low 63 bits count admitted producers. The high bit closes admission
+    // during reset, making reset-vs-push linearizable without blocking push().
+    std::atomic<std::uint64_t> producer_admission_{0};
     std::atomic<LiveSessionState> state_{LiveSessionState::Active};
     std::atomic<bool> muted_{false};
+    std::atomic<std::uint64_t> published_source_id_{0};
+    std::atomic<std::uint64_t> published_source_epoch_{0};
     mutable std::mutex consumer_mutex_;
     std::uint64_t source_id_ = 0;
     std::uint64_t source_epoch_ = 0;

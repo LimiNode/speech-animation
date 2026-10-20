@@ -43,7 +43,9 @@ clock remains fenced and cannot be replaced by that chunk.
 `max_pcm_chunk_samples` bounds the memory of each admitted chunk independently
 of the queue slot count. Oversized chunks are rejected before entering the ring.
 `reset()` and `process_available()` are serialized by the consumer lifecycle
-guard, so reset cannot clear analyzer state while a drain is active.
+guard, and reset closes producer admission through the same atomic gate before
+clearing the queue. Thus reset cannot clear analyzer state or queue storage
+while an admitted producer is still active.
 
 ## Capture and playback clocks
 

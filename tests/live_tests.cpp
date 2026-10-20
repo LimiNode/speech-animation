@@ -1,5 +1,6 @@
 #include "speech_animation/live.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <thread>
 #include <stdexcept>
@@ -176,6 +177,75 @@ int main() {
         CHECK(fenced.push(chunk(40, 100, 16000, 4, 0.4F, 8)) == QueuePushResult::Accepted);
         const auto restarted = fenced.process_available();
         CHECK(restarted.source_id == 40 && restarted.source_epoch == 8);
+
+        // A first process call may race the first producer publication. The
+        // non-empty batch identity must come from the queued chunk itself,
+        // never from a stale pre-publication session snapshot.
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            LiveAudioReactiveSession raced(config());
+            std::atomic<bool> start{false};
+            LiveAudioAnimationBatch first_batch;
+            std::thread consumer_thread([&]() {
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                first_batch = raced.process_available();
+            });
+            start.store(true, std::memory_order_release);
+            CHECK(raced.push(chunk(50, 0, 48000, 4, 0.5F, 3)) ==
+                  QueuePushResult::Accepted);
+            consumer_thread.join();
+            const auto second_batch = raced.process_available();
+            if (!first_batch.empty()) {
+                CHECK(first_batch.source_id == 50 && first_batch.source_epoch == 3);
+            }
+            if (!second_batch.empty()) {
+                CHECK(second_batch.source_id == 50 && second_batch.source_epoch == 3);
+            }
+        }
+
+        // Reset admission and producer admission have a single linearization
+        // gate. Either the push is admitted before reset and then drained, or
+        // it is rejected; neither path may touch reset-owned queue storage.
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            LiveAudioReactiveSession concurrent(config());
+            std::atomic<bool> start{false};
+            std::thread producer([&]() {
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                (void)concurrent.push(chunk(60, 0, 48000, 4, 0.5F, 1));
+            });
+            std::thread resetter([&]() {
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                concurrent.reset(60, 2, 0, 48000);
+            });
+            start.store(true, std::memory_order_release);
+            producer.join();
+            resetter.join();
+            CHECK(concurrent.push(chunk(60, 0, 48000, 4, 0.5F, 2)) ==
+                  QueuePushResult::Accepted);
+            const auto post_reset = concurrent.process_available();
+            CHECK(post_reset.source_id == 60 && post_reset.source_epoch == 2);
+        }
+
+        // Analyzer sample-rate conflicts are rejected before queue admission.
+        auto rate_config = config();
+        rate_config.analyzer.sample_rate = 48000;
+        LiveAudioReactiveSession rate_checked(rate_config);
+        bool reset_rate_rejected = false;
+        try {
+            rate_checked.reset(70, 1, 0, 16000);
+        }
+        catch (const std::invalid_argument&) {
+            reset_rate_rejected = true;
+        }
+        CHECK(reset_rate_rejected);
+        rate_checked.reset(70, 1, 0, 0);
+        CHECK(rate_checked.push(chunk(70, 0, 16000, 4, 0.5F, 1)) ==
+              QueuePushResult::Invalid);
         return 0;
     }
     catch (const std::exception& error) {

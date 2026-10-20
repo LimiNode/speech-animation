@@ -8,15 +8,38 @@
 
 namespace speech_animation::integration {
 
+namespace {
+
+constexpr std::uint64_t kResetAdmissionBit = std::uint64_t{1} << 63;
+constexpr std::uint64_t kProducerCountMask = ~kResetAdmissionBit;
+
+} // namespace
+
 class LiveAudioReactiveSession::ProducerGuard {
 public:
-    explicit ProducerGuard(std::atomic<std::uint32_t>& count) : count_(count) {
-        count_.fetch_add(1, std::memory_order_acq_rel);
+    explicit ProducerGuard(std::atomic<std::uint64_t>& admission)
+        : admission_(admission) {
+        auto snapshot = admission_.load(std::memory_order_acquire);
+        while ((snapshot & kResetAdmissionBit) == 0) {
+            if (admission_.compare_exchange_weak(
+                    snapshot, snapshot + 1, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                admitted_ = true;
+                return;
+            }
+        }
     }
-    ~ProducerGuard() { count_.fetch_sub(1, std::memory_order_release); }
+    ~ProducerGuard() {
+        if (admitted_) {
+            admission_.fetch_sub(1, std::memory_order_release);
+        }
+    }
+
+    bool admitted() const noexcept { return admitted_; }
 
 private:
-    std::atomic<std::uint32_t>& count_;
+    std::atomic<std::uint64_t>& admission_;
+    bool admitted_ = false;
 };
 
 LiveAudioReactiveSession::LiveAudioReactiveSession(LiveAudioSessionConfig config)
@@ -37,16 +60,23 @@ void LiveAudioReactiveSession::reset(std::uint64_t source_id,
     if (source_id == 0 || source_epoch == 0) {
         throw std::invalid_argument("live audio source and epoch must be non-zero");
     }
-    auto expected = state_.load(std::memory_order_acquire);
-    while (expected != LiveSessionState::Resetting &&
-           !state_.compare_exchange_weak(expected, LiveSessionState::Resetting,
-                                          std::memory_order_acq_rel)) {
+    if (sample_rate != 0 && config_.analyzer.sample_rate != 0 &&
+        sample_rate != config_.analyzer.sample_rate) {
+        throw std::invalid_argument("live audio reset sample rate conflicts with analyzer config");
     }
-    if (expected == LiveSessionState::Resetting) {
+    auto admission = producer_admission_.load(std::memory_order_acquire);
+    while ((admission & kResetAdmissionBit) == 0 &&
+           !producer_admission_.compare_exchange_weak(
+               admission, admission | kResetAdmissionBit,
+               std::memory_order_acq_rel, std::memory_order_acquire)) {
+    }
+    if ((admission & kResetAdmissionBit) != 0) {
         throw std::logic_error("live audio reset is already in progress");
     }
+    state_.store(LiveSessionState::Resetting, std::memory_order_release);
     std::lock_guard<std::mutex> lifecycle_lock(consumer_mutex_);
-    while (producers_in_flight_.load(std::memory_order_acquire) != 0) {
+    while ((producer_admission_.load(std::memory_order_acquire) &
+            kProducerCountMask) != 0) {
         std::this_thread::yield();
     }
     for (auto& slot : queue_) slot.reset();
@@ -62,7 +92,10 @@ void LiveAudioReactiveSession::reset(std::uint64_t source_id,
     terminal_emitted_ = false;
     muted_range_.reset();
     muted_.store(false, std::memory_order_release);
+    published_source_id_.store(source_id, std::memory_order_release);
+    published_source_epoch_.store(source_epoch, std::memory_order_release);
     state_.store(LiveSessionState::Active, std::memory_order_release);
+    producer_admission_.fetch_and(kProducerCountMask, std::memory_order_release);
 }
 
 std::size_t LiveAudioReactiveSession::queued_chunks() const noexcept {
@@ -95,12 +128,17 @@ QueuePushResult LiveAudioReactiveSession::initialize_from_chunk(const LivePcmChu
         next_input_sample_ = chunk.first_sample;
         sample_clock_initialized_ = true;
     }
+    published_source_id_.store(source_id_, std::memory_order_release);
+    published_source_epoch_.store(source_epoch_, std::memory_order_release);
     initialized_ = true;
     return QueuePushResult::Accepted;
 }
 
 QueuePushResult LiveAudioReactiveSession::push(LivePcmChunk chunk) {
-    ProducerGuard guard(producers_in_flight_);
+    ProducerGuard guard(producer_admission_);
+    if (!guard.admitted()) {
+        return QueuePushResult::RejectedTerminal;
+    }
     if (state_.load(std::memory_order_acquire) != LiveSessionState::Active) {
         return QueuePushResult::RejectedTerminal;
     }
@@ -116,6 +154,10 @@ QueuePushResult LiveAudioReactiveSession::push(LivePcmChunk chunk) {
         chunk.sample_count > config_.max_pcm_chunk_samples ||
         chunk.sample_count != chunk.pcm.size() ||
         chunk.first_sample > std::numeric_limits<std::uint64_t>::max() - chunk.sample_count) {
+        return QueuePushResult::Invalid;
+    }
+    if (config_.analyzer.sample_rate != 0 &&
+        chunk.sample_rate != config_.analyzer.sample_rate) {
         return QueuePushResult::Invalid;
     }
     if (!initialized_) {
@@ -144,11 +186,18 @@ QueuePushResult LiveAudioReactiveSession::push(LivePcmChunk chunk) {
     return QueuePushResult::Accepted;
 }
 
-void LiveAudioReactiveSession::drain_one(std::vector<SpeechAnimationSpan>& output) {
+void LiveAudioReactiveSession::drain_one(LiveAudioAnimationBatch& batch) {
     const auto read = read_index_.load(std::memory_order_relaxed);
     auto queued = std::move(*queue_[read % config_.queue_capacity]);
     queue_[read % config_.queue_capacity].reset();
     read_index_.store(read + 1, std::memory_order_release);
+
+    // The queued chunk is the publication boundary for capture identity.
+    // Never derive a non-empty batch from producer-owned session fields.
+    if (batch.spans.empty()) {
+        batch.source_id = queued.chunk.source_id;
+        batch.source_epoch = queued.chunk.source_epoch;
+    }
 
     std::vector<float> muted_pcm;
     const auto* samples = queued.chunk.pcm.data();
@@ -187,32 +236,32 @@ void LiveAudioReactiveSession::drain_one(std::vector<SpeechAnimationSpan>& outpu
             muted_range_.reset();
         }
     }
-    output.insert(output.end(), spans.begin(), spans.end());
+    batch.spans.insert(batch.spans.end(), spans.begin(), spans.end());
 }
 
 LiveAudioAnimationBatch LiveAudioReactiveSession::process_available() {
     std::lock_guard<std::mutex> lifecycle_lock(consumer_mutex_);
     LiveAudioAnimationBatch batch;
-    batch.source_id = source_id_;
-    batch.source_epoch = source_epoch_;
+    batch.source_id = published_source_id_.load(std::memory_order_acquire);
+    batch.source_epoch = published_source_epoch_.load(std::memory_order_acquire);
     if (state_.load(std::memory_order_acquire) == LiveSessionState::Resetting) {
         return batch;
     }
-    auto& output = batch.spans;
     while (true) {
         auto read = read_index_.load(std::memory_order_relaxed);
         const auto write = write_index_.load(std::memory_order_acquire);
         if (read == write) break;
-        drain_one(output);
+        drain_one(batch);
     }
     if (state_.load(std::memory_order_acquire) == LiveSessionState::Stopped &&
         !terminal_emitted_) {
-        while (producers_in_flight_.load(std::memory_order_acquire) != 0) {
+        while ((producer_admission_.load(std::memory_order_acquire) &
+                kProducerCountMask) != 0) {
             std::this_thread::yield();
         }
         while (read_index_.load(std::memory_order_relaxed) !=
                write_index_.load(std::memory_order_acquire)) {
-            drain_one(output);
+            drain_one(batch);
         }
         const auto tail = analyzer_.flush();
         for (auto span : tail) {
@@ -226,7 +275,7 @@ LiveAudioAnimationBatch LiveAudioReactiveSession::process_available() {
                 span.activity = SpeechActivity::Silence;
                 span.viseme.reset();
             }
-            output.push_back(std::move(span));
+            batch.spans.push_back(std::move(span));
         }
         muted_range_.reset();
         terminal_emitted_ = true;
