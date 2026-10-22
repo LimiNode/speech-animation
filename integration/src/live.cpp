@@ -80,9 +80,13 @@ void LiveAudioReactiveSession::reset(std::uint64_t source_id,
         std::this_thread::yield();
     }
     for (auto& slot : queue_) slot.reset();
-    write_index_.store(0, std::memory_order_relaxed);
     read_index_.store(0, std::memory_order_relaxed);
+    // Publish write last: an observer that acquires the reset write index also
+    // observes the reset read index, preventing a transient unsigned wrap.
+    write_index_.store(0, std::memory_order_release);
     analyzer_.reset();
+    consumer_source_id_ = source_id;
+    consumer_source_epoch_ = source_epoch;
     source_id_ = source_id;
     source_epoch_ = source_epoch;
     next_input_sample_ = first_sample;
@@ -92,15 +96,20 @@ void LiveAudioReactiveSession::reset(std::uint64_t source_id,
     terminal_emitted_ = false;
     muted_range_.reset();
     muted_.store(false, std::memory_order_release);
-    published_source_id_.store(source_id, std::memory_order_release);
-    published_source_epoch_.store(source_epoch, std::memory_order_release);
     state_.store(LiveSessionState::Active, std::memory_order_release);
     producer_admission_.fetch_and(kProducerCountMask, std::memory_order_release);
 }
 
 std::size_t LiveAudioReactiveSession::queued_chunks() const noexcept {
+    if (state_.load(std::memory_order_acquire) == LiveSessionState::Resetting) {
+        return 0;
+    }
     const auto write = write_index_.load(std::memory_order_acquire);
     const auto read = read_index_.load(std::memory_order_acquire);
+    if (state_.load(std::memory_order_acquire) == LiveSessionState::Resetting ||
+        write < read) {
+        return 0;
+    }
     return static_cast<std::size_t>(write - read);
 }
 
@@ -128,8 +137,6 @@ QueuePushResult LiveAudioReactiveSession::initialize_from_chunk(const LivePcmChu
         next_input_sample_ = chunk.first_sample;
         sample_clock_initialized_ = true;
     }
-    published_source_id_.store(source_id_, std::memory_order_release);
-    published_source_epoch_.store(source_epoch_, std::memory_order_release);
     initialized_ = true;
     return QueuePushResult::Accepted;
 }
@@ -198,6 +205,8 @@ void LiveAudioReactiveSession::drain_one(LiveAudioAnimationBatch& batch) {
         batch.source_id = queued.chunk.source_id;
         batch.source_epoch = queued.chunk.source_epoch;
     }
+    consumer_source_id_ = queued.chunk.source_id;
+    consumer_source_epoch_ = queued.chunk.source_epoch;
 
     std::vector<float> muted_pcm;
     const auto* samples = queued.chunk.pcm.data();
@@ -242,8 +251,8 @@ void LiveAudioReactiveSession::drain_one(LiveAudioAnimationBatch& batch) {
 LiveAudioAnimationBatch LiveAudioReactiveSession::process_available() {
     std::lock_guard<std::mutex> lifecycle_lock(consumer_mutex_);
     LiveAudioAnimationBatch batch;
-    batch.source_id = published_source_id_.load(std::memory_order_acquire);
-    batch.source_epoch = published_source_epoch_.load(std::memory_order_acquire);
+    batch.source_id = consumer_source_id_;
+    batch.source_epoch = consumer_source_epoch_;
     if (state_.load(std::memory_order_acquire) == LiveSessionState::Resetting) {
         return batch;
     }

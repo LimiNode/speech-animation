@@ -34,7 +34,9 @@ network stream replacement therefore do not leak adaptive DSP state.
 `process_available()` returns a `LiveAudioAnimationBatch`, not a bare vector.
 The batch carries `source_id` and `source_epoch` next to its generic spans, so
 presentation code can reject delayed output from an earlier capture restart
-even when sample coordinates are reused.
+even when sample coordinates are reused. Non-empty batch identity is copied
+from the dequeued chunk itself; empty batches use consumer-owned identity, so
+the two identity fields cannot be observed from different publications.
 
 `reset()` always establishes the first sample position. If `sample_rate` is
 zero, only the rate is learned from the first chunk; the reset-provided sample

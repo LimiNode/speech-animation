@@ -196,6 +196,10 @@ int main() {
                   QueuePushResult::Accepted);
             consumer_thread.join();
             const auto second_batch = raced.process_available();
+            CHECK((first_batch.source_id == 0 && first_batch.source_epoch == 0) ||
+                  (first_batch.source_id == 50 && first_batch.source_epoch == 3));
+            CHECK((second_batch.source_id == 0 && second_batch.source_epoch == 0) ||
+                  (second_batch.source_id == 50 && second_batch.source_epoch == 3));
             if (!first_batch.empty()) {
                 CHECK(first_batch.source_id == 50 && first_batch.source_epoch == 3);
             }
@@ -229,6 +233,30 @@ int main() {
                   QueuePushResult::Accepted);
             const auto post_reset = concurrent.process_available();
             CHECK(post_reset.source_id == 60 && post_reset.source_epoch == 2);
+        }
+
+        // queued_chunks() is observational during reset but must always stay
+        // bounded; reset index publication must never expose unsigned wrap.
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            LiveAudioReactiveSession observed(config(4));
+            CHECK(observed.push(chunk(65, 0, 48000, 4, 0.5F, 1)) ==
+                  QueuePushResult::Accepted);
+            std::atomic<bool> start{false};
+            std::atomic<bool> finished{false};
+            std::thread resetter([&]() {
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                observed.reset(65, 2, 0, 48000);
+                finished.store(true, std::memory_order_release);
+            });
+            start.store(true, std::memory_order_release);
+            while (!finished.load(std::memory_order_acquire)) {
+                CHECK(observed.queued_chunks() <= observed.config().queue_capacity);
+                std::this_thread::yield();
+            }
+            resetter.join();
+            CHECK(observed.queued_chunks() == 0);
         }
 
         // Analyzer sample-rate conflicts are rejected before queue admission.

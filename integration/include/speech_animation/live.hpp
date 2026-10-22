@@ -107,9 +107,11 @@ private:
     std::atomic<std::uint64_t> producer_admission_{0};
     std::atomic<LiveSessionState> state_{LiveSessionState::Active};
     std::atomic<bool> muted_{false};
-    std::atomic<std::uint64_t> published_source_id_{0};
-    std::atomic<std::uint64_t> published_source_epoch_{0};
     mutable std::mutex consumer_mutex_;
+    // Consumer-owned identity for empty batches. Non-empty batches take their
+    // identity directly from the dequeued chunk publication boundary.
+    std::uint64_t consumer_source_id_ = 0;
+    std::uint64_t consumer_source_epoch_ = 0;
     std::uint64_t source_id_ = 0;
     std::uint64_t source_epoch_ = 0;
     std::uint64_t next_input_sample_ = 0;
